@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 # --- Конфигурация ---
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/blob/main/background_music.mp3"
+GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 
 # ==================== ЭНДПОИНТЫ ====================
 
