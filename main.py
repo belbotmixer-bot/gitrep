@@ -52,26 +52,35 @@ def test_endpoint():
 def process_audio():
     """Основной эндпоинт для обработки аудио"""
     logger.info("🎯 /process_audio endpoint called!")
-
+    
+    # Детальное логирование запроса
     logger.info(f"📋 Content-Type: {request.content_type}")
     logger.info(f"📋 Headers: {dict(request.headers)}")
-
+    
     try:
-        # --- Получаем данные ---
+        # Пробуем разные способы получить данные
+        data = None
         if request.is_json:
             data = request.get_json()
             logger.info(f"📦 JSON data: {data}")
         else:
-            data = request.get_json(force=True, silent=True) or request.form.to_dict()
-            logger.info(f"📦 Fallback data: {data}")
+            # Пробуем форсировать JSON парсинг
+            data = request.get_json(force=True, silent=True)
+            if data:
+                logger.info(f"📦 Forced JSON data: {data}")
+            else:
+                # Пробуем form-data
+                data = request.form.to_dict()
+                logger.info(f"📦 Form data: {data}")
 
         if not data:
             logger.error("❌ No data received")
             return jsonify({"error": "No data received"}), 400
 
+        # Извлекаем параметры из SaleBot переменных
         voice_url = data.get("voice_url")
-        client_id = data.get("client_id")
-        name = data.get("name")
+        client_id = data.get("client_id")  # #{client_id}
+        name = data.get("name")            # #{name}
 
         logger.info(f"🔍 voice_url: {voice_url}")
         logger.info(f"🔍 client_id: {client_id}")
@@ -81,62 +90,33 @@ def process_audio():
             logger.error("❌ voice_url is required")
             return jsonify({"error": "voice_url is required"}), 400
 
-        # --- 1. Скачиваем голосовое сообщение ---
+        # 1. Скачиваем голосовое сообщение
+        logger.info(f"📥 Downloading from: {voice_url}")
         try:
-            cached_buster_url = f"{voice_url}?nocache={int(time.time())}"
-            logger.info(f"📥 Downloading from (cache-busted): {cached_buster_url}")
-
-            voice_response = requests.get(cached_buster_url, timeout=300)
+            voice_response = requests.get(voice_url, timeout=30)
             voice_response.raise_for_status()
-
-            voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
-            with open(voice_filename, "wb") as f:
-                f.write(voice_response.content)
-            logger.info(f"💾 Saved voice as: {voice_filename}")
-
         except Exception as e:
             logger.error(f"❌ Failed to download voice: {str(e)}")
             return jsonify({"error": f"Failed to download voice: {str(e)}"}), 400
 
-        # --- 2. Обрабатываем аудио ---
+        # 2. Сохраняем временный файл
+        voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
+        with open(voice_filename, "wb") as f:
+            f.write(voice_response.content)
+        logger.info(f"💾 Saved voice as: {voice_filename}")
+
+        # 3. Обрабатываем аудио
         output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
         output_path = os.path.join(os.getcwd(), output_filename)
-
+        
+        logger.info("🎵 Mixing audio with music...")
         try:
-            logger.info("🎵 Mixing audio with music...")
             mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
             logger.info("✅ Audio mixed successfully")
         except Exception as e:
             logger.error(f"❌ Audio processing failed: {str(e)}")
             cleanup(voice_filename)
             return jsonify({"error": f"Audio processing failed: {str(e)}"}), 500
-
-        # --- 3. Создаём URL для скачивания ---
-        download_url = f"{request.host_url}download/{output_filename}"
-        logger.info(f"🔗 Download URL: {download_url}")
-
-        # --- 4. Очистка временных файлов ---
-        cleanup(voice_filename)
-
-        # --- 5. Ответ ---
-        response_data = {
-            "status": "success",
-            "message": "Audio processed successfully",
-            "download_url": download_url,
-            "file_name": output_filename,
-            "client_id": client_id,
-            "name": name,
-            "processed_at": time.time()
-        }
-
-        logger.info(f"✅ Success: {response_data}")
-        return jsonify(response_data)
-
-    except Exception as e:
-        logger.error(f"❌ Error in /process_audio: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
 
         # 4. Создаем URL для скачивания
         download_url = f"{request.host_url}download/{output_filename}"
