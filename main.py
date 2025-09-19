@@ -145,22 +145,22 @@ def process_audio():
 @app.route("/download/<filename>", methods=["GET"])
 def download_file(filename):
     try:
+        # Проверяем безопасность пути
         safe_filename = os.path.basename(filename)
         file_path = os.path.join(os.getcwd(), safe_filename)
         
         if not os.path.exists(file_path) or '..' in filename or '/' in filename:
             return jsonify({"status": "error", "message": "File not found"}), 404
+
+        # Генерируем уникальное имя файла для выдачи в Telegram
+        timestamp = int(time.time())
+        unique_name = f"voice_mix_{timestamp}_{safe_filename}"
         
-        # Добавляем заголовки, запрещающие кэширование  🆕
-        response = make_response(send_file(
+        return send_file(
             file_path,
             as_attachment=True,
-            download_name=f"voice_mix_{safe_filename}"
-        ))
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
+            download_name=unique_name
+        )
     
     except Exception as e:
         logger.error(f"❌ Download error: {str(e)}")
