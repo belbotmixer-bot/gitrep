@@ -86,7 +86,7 @@ def process_audio():
             cached_buster_url = f"{voice_url}?nocache={int(time.time())}"
             logger.info(f"📥 Downloading from (cache-busted): {cached_buster_url}")
 
-            voice_response = requests.get(cached_buster_url, timeout=30)
+            voice_response = requests.get(cached_buster_url, timeout=300)
             voice_response.raise_for_status()
 
             voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
