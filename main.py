@@ -45,6 +45,7 @@ def test_endpoint():
     try:
         data = request.get_json()
         logger.info(f"📦 JSON data: {data}")
+        logger.info(f"📦 Incoming data: {data}")
     except:
         logger.info("📦 No JSON data")
 
