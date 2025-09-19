@@ -16,14 +16,14 @@ app = Flask(__name__)
 # --- Конфигурация ---
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
-SALEBOT_GROUP_ID = os.environ.get("SALEBOT_BOT_ID")
+SALEBOT_GROUP_ID = os.environ.get("SALEBOT_GROUP_ID")
 SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY")
 
 # ==================== Уведомление SaleBot ====================
 
 def notify_salebot(client_id, download_url, name):
     """Отправка push-сообщения в SaleBot"""
-    if not SALEBOT_BOT_ID or not SALEBOT_API_KEY:
+    if not SALEBOT_GROUP_ID or not SALEBOT_API_KEY:
         logger.error("❌ SALEBOT_GROUP_ID или SALEBOT_API_KEY не заданы в переменных окружения")
         return
 
