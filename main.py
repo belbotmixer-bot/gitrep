@@ -73,26 +73,16 @@ def index():
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    ...
-    # 6. Возвращаем ответ для SaleBot
-    response_data = {
-        "status": "success",
-        "message": "Audio processed successfully",
-        "download_url": download_url,
-        "file_name": output_filename,
-        "client_id": client_id,
-        "name": name,
-        "processed_at": time.time()
-    }
+    try:
+        data = request.json
+        voice_url = data.get("voice_url")
+        client_id = data.get("client_id")
+        name = data.get("name", "Пользователь")
 
-    logger.info(f"✅ Success: {response_data}")
+        if not voice_url or not client_id:
+            return jsonify({"error": "voice_url и client_id обязательны"}), 400
 
-    # 🔔 Отправляем уведомление в SaleBot (push-схема)
-    notify_salebot(client_id, name, download_url)
-
-    return jsonify(response_data)
-
-        # Скачиваем голосовое сообщение
+        # 1. Скачиваем голосовое сообщение
         logger.info(f"📥 Скачиваем голосовое: {voice_url}")
         voice_response = requests.get(voice_url, timeout=30)
         voice_response.raise_for_status()
@@ -102,7 +92,7 @@ def process_audio():
             f.write(voice_response.content)
         logger.info(f"💾 Голос сохранён: {voice_filename}")
 
-        # Обрабатываем аудио
+        # 2. Обрабатываем аудио
         output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
         output_path = os.path.join(os.getcwd(), output_filename)
 
@@ -110,23 +100,29 @@ def process_audio():
         mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
         logger.info("✅ Аудио успешно обработано")
 
+        # 3. Чистим временный файл
         cleanup(voice_filename)
 
-        # Генерируем ссылку для скачивания
+        # 4. Генерируем ссылку для скачивания
         download_url = f"{request.host_url}download/{output_filename}"
         logger.info(f"🔗 Ссылка на результат: {download_url}")
 
-        # Уведомляем SaleBot в отдельном потоке (чтобы не блокировать ответ)
-        Thread(target=notify_salebot, args=(client_id, download_url, name)).start()
+        # 5. Уведомляем SaleBot в отдельном потоке (push-схема)
+        Thread(target=notify_salebot, args=(client_id, name, download_url)).start()
 
-        # Отвечаем 202 Accepted, чтобы бот знал — задача взята
-        return jsonify({
-            "status": "processing",
-            "message": "Аудио обрабатывается",
+        # 6. Возвращаем ответ для SaleBot
+        response_data = {
+            "status": "success",
+            "message": "Audio processed successfully",
+            "download_url": download_url,
+            "file_name": output_filename,
             "client_id": client_id,
             "name": name,
-            "submitted_at": time.time()
-        }), 202
+            "processed_at": time.time()
+        }
+
+        logger.info(f"✅ Success: {response_data}")
+        return jsonify(response_data)
 
     except Exception as e:
         logger.error(f"❌ Ошибка в /process_audio: {e}")
