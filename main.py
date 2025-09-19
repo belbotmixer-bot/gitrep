@@ -31,22 +31,18 @@ def notify_salebot(client_id: str, name: str, download_url: str):
             logger.error("❌ SALEBOT_GROUP_ID или SALEBOT_API_KEY не заданы")
             return
 
-        # Формируем сообщение
+        # Формируем текст сообщения
         text = f"🎵 {name}, ваша аффирмация готова!\n{download_url}"
 
         payload = {
-            "group_id": SALEBOT_GROUP_ID,
             "client_id": client_id,
             "text": text
         }
 
-        headers = {
-            "Authorization": f"Bearer {SALEBOT_API_KEY}",
-            "Content-Type": "application/json"
-        }
+        # ✅ Правильный endpoint Salebot (групповой + токен в URL)
+        url = f"https://salebot.pro/api/{SALEBOT_GROUP_ID}/send_message?token={SALEBOT_API_KEY}"
 
-        url = "https://salebot.pro/api/message.send"
-        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+        resp = requests.post(url, json=payload, timeout=15)
 
         if resp.status_code == 200:
             logger.info(f"✅ Уведомление SaleBot успешно отправлено: {resp.json()}")
