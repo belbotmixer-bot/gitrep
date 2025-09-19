@@ -19,35 +19,42 @@ GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/mai
 SALEBOT_GROUP_ID = os.environ.get("SALEBOT_GROUP_ID")
 SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY")
 
-# ==================== Уведомление SaleBot ====================
+# ==================== УВЕДОМЛЕНИЕ SALEBOT ====================
 
-def notify_salebot(client_id, download_url, name):
-    """Отправка push-сообщения в SaleBot"""
-    if not SALEBOT_GROUP_ID or not SALEBOT_API_KEY:
-        logger.error("❌ SALEBOT_GROUP_ID или SALEBOT_API_KEY не заданы в переменных окружения")
-        return
+SALEBOT_GROUP_ID = os.environ.get("SALEBOT_GROUP_ID")
+SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY")
 
-    url = f"https://chatter.salebot.pro/api/{SALEBOT_GROUP_ID}/push"
-    headers = {"Authorization": f"Bearer {SALEBOT_API_KEY}"}
-    payload = {
-        "client_id": client_id,
-        "message": f"🎶 {name}, ваша аффирмация готова!",
-        "attachments": [
-            {
-                "type": "audio",
-                "url": download_url
-            }
-        ]
-    }
-
+def notify_salebot(client_id: str, name: str, download_url: str):
+    """Уведомление SaleBot о готовности файла (только текст)."""
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=15)
+        if not SALEBOT_GROUP_ID or not SALEBOT_API_KEY:
+            logger.error("❌ SALEBOT_GROUP_ID или SALEBOT_API_KEY не заданы")
+            return
+
+        # Формируем сообщение
+        text = f"🎵 {name}, ваша аффирмация готова!\n{download_url}"
+
+        payload = {
+            "group_id": SALEBOT_GROUP_ID,
+            "client_id": client_id,
+            "text": text
+        }
+
+        headers = {
+            "Authorization": f"Bearer {SALEBOT_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        url = "https://api.salebot.pro/message.send"
+        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+
         if resp.status_code == 200:
-            logger.info("✅ SaleBot уведомлён успешно")
+            logger.info(f"✅ Уведомление SaleBot успешно отправлено: {resp.json()}")
         else:
             logger.error(f"❌ Ошибка уведомления SaleBot: {resp.status_code} {resp.text}")
+
     except Exception as e:
-        logger.error(f"⚠️ Ошибка при отправке в SaleBot: {e}")
+        logger.error(f"⚠️ Ошибка в notify_salebot: {e}")
 
 # ==================== ЭНДПОИНТЫ ====================
 
