@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, make_response
 import os
 import uuid
 import time
@@ -53,23 +53,20 @@ def process_audio():
     """Основной эндпоинт для обработки аудио"""
     logger.info("🎯 /process_audio endpoint called!")
     
-    # Детальное логирование запроса
     logger.info(f"📋 Content-Type: {request.content_type}")
     logger.info(f"📋 Headers: {dict(request.headers)}")
     
     try:
-        # Пробуем разные способы получить данные
+        # Получаем данные
         data = None
         if request.is_json:
             data = request.get_json()
             logger.info(f"📦 JSON data: {data}")
         else:
-            # Пробуем форсировать JSON парсинг
             data = request.get_json(force=True, silent=True)
             if data:
                 logger.info(f"📦 Forced JSON data: {data}")
             else:
-                # Пробуем form-data
                 data = request.form.to_dict()
                 logger.info(f"📦 Form data: {data}")
 
@@ -77,10 +74,9 @@ def process_audio():
             logger.error("❌ No data received")
             return jsonify({"error": "No data received"}), 400
 
-        # Извлекаем параметры из SaleBot переменных
         voice_url = data.get("voice_url")
-        client_id = data.get("client_id")  # #{client_id}
-        name = data.get("name")            # #{name}
+        client_id = data.get("client_id")
+        name = data.get("name")
 
         logger.info(f"🔍 voice_url: {voice_url}")
         logger.info(f"🔍 client_id: {client_id}")
@@ -118,14 +114,15 @@ def process_audio():
             cleanup(voice_filename)
             return jsonify({"error": f"Audio processing failed: {str(e)}"}), 500
 
-        # 4. Создаем URL для скачивания
-        download_url = f"{request.host_url}download/{output_filename}"
+        # 4. Создаем URL с timestamp, чтобы избежать кэша  🆕
+        timestamp = int(time.time())
+        download_url = f"{request.host_url}download/{output_filename}?v={timestamp}"
         logger.info(f"🔗 Download URL: {download_url}")
 
-        # 5. Очистка временных файлов (голосового)
+        # 5. Очистка временных файлов
         cleanup(voice_filename)
 
-        # 6. Возвращаем ответ для SaleBot
+        # 6. Возвращаем ответ
         response_data = {
             "status": "success",
             "message": "Audio processed successfully",
@@ -148,23 +145,23 @@ def process_audio():
 @app.route("/download/<filename>", methods=["GET"])
 def download_file(filename):
     try:
-        # Проверяем безопасность пути
         safe_filename = os.path.basename(filename)
         file_path = os.path.join(os.getcwd(), safe_filename)
         
         if not os.path.exists(file_path) or '..' in filename or '/' in filename:
             return jsonify({"status": "error", "message": "File not found"}), 404
         
-        # ИСПРАВЛЕННЫЙ ВЫЗОВ - убрали as_attachment_filename
-        return send_file(
+        # Добавляем заголовки, запрещающие кэширование  🆕
+        response = make_response(send_file(
             file_path,
             as_attachment=True,
             download_name=f"voice_mix_{safe_filename}"
-        )
+        ))
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     
-    except Exception as e:
-        logging.error(f"❌ Download error: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 404
     except Exception as e:
         logger.error(f"❌ Download error: {str(e)}")
         return jsonify({"error": str(e)}), 500
