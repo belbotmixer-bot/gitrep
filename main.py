@@ -45,7 +45,7 @@ def notify_salebot(client_id: str, name: str, download_url: str):
             "Content-Type": "application/json"
         }
 
-        url = "https://api.salebot.pro/message.send"
+        url = "https://salebot.pro/api/message.send"
         resp = requests.post(url, json=payload, headers=headers, timeout=15)
 
         if resp.status_code == 200:
