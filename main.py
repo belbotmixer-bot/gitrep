@@ -73,23 +73,24 @@ def index():
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    logger.info("🎯 /process_audio endpoint called!")
+    ...
+    # 6. Возвращаем ответ для SaleBot
+    response_data = {
+        "status": "success",
+        "message": "Audio processed successfully",
+        "download_url": download_url,
+        "file_name": output_filename,
+        "client_id": client_id,
+        "name": name,
+        "processed_at": time.time()
+    }
 
-    try:
-        data = request.get_json(force=True, silent=True) or request.form.to_dict()
-        if not data:
-            return jsonify({"error": "No data received"}), 400
+    logger.info(f"✅ Success: {response_data}")
 
-        voice_url = data.get("voice_url")
-        client_id = data.get("client_id")
-        name = data.get("name")
+    # 🔔 Отправляем уведомление в SaleBot (push-схема)
+    notify_salebot(client_id, name, download_url)
 
-        logger.info(f"🔍 voice_url: {voice_url}")
-        logger.info(f"🔍 client_id: {client_id}")
-        logger.info(f"🔍 name: {name}")
-
-        if not voice_url:
-            return jsonify({"error": "voice_url is required"}), 400
+    return jsonify(response_data)
 
         # Скачиваем голосовое сообщение
         logger.info(f"📥 Скачиваем голосовое: {voice_url}")
