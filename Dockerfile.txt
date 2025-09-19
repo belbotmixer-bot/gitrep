@@ -7,15 +7,11 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Устанавливаем зависимости
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# Копируем проект
 COPY . .
 
-# Render сам пробрасывает PORT, EXPOSE можно не указывать, но оставим для читаемости
-EXPOSE 5000
+EXPOSE 10000
 
-# Запуск Gunicorn c таймаутом 300 сек
-CMD gunicorn main:app --bind 0.0.0.0:$PORT --timeout 300
+CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:10000", "--timeout", "120"]
