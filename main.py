@@ -33,16 +33,12 @@ def notify_salebot(client_id, download_url, name=""):
     """Обновляем custom_answer клиента в SaleBot"""
     url = f"https://chatter.salebot.pro/api/update_client/{SALEBOT_API_KEY}/{client_id}"
     payload = {
-        "id": client_id,
-        "custom_answer": {
-            "client_id": client_id,
-            "download_url": download_url,
-            "file_name": os.path.basename(download_url),
-            "status": "success",
-            "name": name,
-            "message": "Audio processed successfully"
-        }
+    "custom_answer": {
+        "download_url": download_url,
+        "status": "success",
+        "message": "🎵 Аудио готово!"
     }
+}
     try:
         r = requests.post(url, json=payload, timeout=10)
         logger.info(f"📤 Notify SaleBot response: {r.text}")
