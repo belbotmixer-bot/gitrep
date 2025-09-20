@@ -14,15 +14,12 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # --- Конфигурация ---
-TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 SALEBOT_GROUP_ID = os.environ.get("SALEBOT_GROUP_ID")
 SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY")
 
 # ==================== УВЕДОМЛЕНИЕ SALEBOT ====================
-
-SALEBOT_GROUP_ID = os.environ.get("SALEBOT_GROUP_ID")
-SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY")
 
 def notify_salebot(client_id: str, name: str, download_url: str):
     """Уведомление SaleBot о готовности файла (только текст)."""
@@ -52,6 +49,24 @@ def notify_salebot(client_id: str, name: str, download_url: str):
     except Exception as e:
         logger.error(f"⚠️ Ошибка в notify_salebot: {e}")
 
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
+
+def get_telegram_file_url(file_id: str) -> str:
+    """Получаем прямую ссылку на файл в Telegram по file_id"""
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}"
+    resp = requests.get(api_url, timeout=10)
+    resp.raise_for_status()
+    file_path = resp.json()["result"]["file_path"]
+    return f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+
+def cleanup(filename):
+    try:
+        if os.path.exists(filename):
+            os.remove(filename)
+            logger.info(f"🗑️ Deleted: {filename}")
+    except Exception as e:
+        logger.error(f"⚠️ Ошибка при очистке {filename}: {e}")
+
 # ==================== ЭНДПОИНТЫ ====================
 
 @app.route("/health")
@@ -60,7 +75,7 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "1.1"
+        "version": "1.2"
     })
 
 @app.route("/")
@@ -71,15 +86,25 @@ def index():
 def process_audio():
     try:
         data = request.json
-        voice_url = data.get("voice_url")
+        file_id = data.get("file_id")       # новый вариант
+        voice_url = data.get("voice_url")   # старый вариант
         client_id = data.get("client_id")
         name = data.get("name", "Пользователь")
 
-        if not voice_url or not client_id:
-            return jsonify({"error": "voice_url и client_id обязательны"}), 400
+        if not (file_id or voice_url):
+            return jsonify({"error": "Нужно передать либо file_id, либо voice_url"}), 400
+        if not client_id:
+            return jsonify({"error": "client_id обязателен"}), 400
 
-        # 1. Скачиваем голосовое сообщение
-        logger.info(f"📥 Скачиваем голосовое: {voice_url}")
+        # 1. Определяем источник файла
+        if file_id:
+            logger.info(f"🎤 Получен file_id: {file_id}")
+            voice_url = get_telegram_file_url(file_id)
+            logger.info(f"📥 Telegram file URL: {voice_url}")
+        else:
+            logger.info(f"📥 Скачиваем голосовое по URL: {voice_url}")
+
+        # 2. Скачиваем голосовое сообщение
         voice_response = requests.get(voice_url, timeout=30)
         voice_response.raise_for_status()
 
@@ -88,7 +113,7 @@ def process_audio():
             f.write(voice_response.content)
         logger.info(f"💾 Голос сохранён: {voice_filename}")
 
-        # 2. Обрабатываем аудио
+        # 3. Обрабатываем аудио
         output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
         output_path = os.path.join(os.getcwd(), output_filename)
 
@@ -96,17 +121,17 @@ def process_audio():
         mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
         logger.info("✅ Аудио успешно обработано")
 
-        # 3. Чистим временный файл
+        # 4. Чистим временный файл
         cleanup(voice_filename)
 
-        # 4. Генерируем ссылку для скачивания
+        # 5. Генерируем ссылку для скачивания
         download_url = f"{request.host_url}download/{output_filename}"
         logger.info(f"🔗 Ссылка на результат: {download_url}")
 
-        # 5. Уведомляем SaleBot в отдельном потоке (push-схема)
+        # 6. Уведомляем SaleBot в отдельном потоке (push-схема)
         Thread(target=notify_salebot, args=(client_id, name, download_url)).start()
 
-        # 6. Возвращаем ответ для SaleBot
+        # 7. Возвращаем ответ для SaleBot
         response_data = {
             "status": "success",
             "message": "Audio processed successfully",
@@ -137,14 +162,6 @@ def download_file(filename):
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки файла: {e}")
         return jsonify({"error": str(e)}), 500
-
-def cleanup(filename):
-    try:
-        if os.path.exists(filename):
-            os.remove(filename)
-            logger.info(f"🗑️ Deleted: {filename}")
-    except Exception as e:
-        logger.error(f"⚠️ Ошибка при очистке {filename}: {e}")
 
 # ==================== ЗАПУСК СЕРВЕРА ====================
 if __name__ == "__main__":
