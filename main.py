@@ -1,105 +1,93 @@
-from flask import Flask, request, jsonify, send_file
 import os
+import time
 import uuid
-import requests
 import logging
 import threading
-import time
-from audio_processor import mix_voice_with_music
+import requests
+from flask import Flask, request, jsonify, send_from_directory
 
-# --- Логирование ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# 🔧 Конфиг
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+
+DOWNLOAD_FOLDER = "downloads"
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
 
-# --- Конфигурация ---
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
+# 📒 Логирование
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("main")
 
-# ==================== УТИЛИТЫ ====================
 
-def cleanup(filename):
-    """Удаляем временные файлы"""
+# 📤 Отправка в Telegram
+def send_to_telegram(chat_id, file_url):
     try:
-        if filename and os.path.exists(filename):
-            os.remove(filename)
-            logger.info(f"🗑️ Deleted: {filename}")
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
+        payload = {
+            "chat_id": chat_id,
+            "audio": file_url
+        }
+        resp = requests.post(url, data=payload, timeout=20)
+        logger.info(f"📤 Telegram response: {resp.text}")
     except Exception as e:
-        logger.error(f"⚠️ Cleanup error for {filename}: {e}")
+        logger.error(f"❌ Failed to send to Telegram: {e}")
 
 
-def send_to_telegram(chat_id, download_url, name=""):
-    """Отправляем ссылку на готовый файл в Telegram"""
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": f"🎵 Привет {name or ''}! Вот твой готовый микс: {download_url}"
-    }
+# 🎵 Обработка аудио
+def process_audio_task(voice_url, chat_id, name, host_url):
     try:
-        r = requests.post(url, json=payload, timeout=10)
-        logger.info(f"📤 Telegram response: {r.text}")
-    except Exception as e:
-        logger.error(f"❌ Failed to send Telegram message: {e}")
-
-
-def process_audio_task(voice_url, client_id, name, base_url):
-    """Фоновая задача: качаем → миксуем → шлём ссылку в Telegram"""
-    voice_filename = None
-    try:
-        # 1. Скачиваем голос
         logger.info(f"📥 Downloading from: {voice_url}")
-        resp = requests.get(voice_url, timeout=30)
-        resp.raise_for_status()
 
-        voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
-        with open(voice_filename, "wb") as f:
-            f.write(resp.content)
+        # скачать .oga
+        file_id = str(uuid.uuid4())
+        ogg_path = os.path.join(DOWNLOAD_FOLDER, f"voice_{file_id}.ogg")
+        with requests.get(voice_url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(ogg_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
 
-        # 2. Обработка
-        output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
-        output_path = os.path.join(os.getcwd(), output_filename)
-        mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
+        # эмуляция "микширования" -> переименуем в mp3
+        mp3_filename = f"mixed_{file_id}.mp3"
+        mp3_path = os.path.join(DOWNLOAD_FOLDER, mp3_filename)
+        os.rename(ogg_path, mp3_path)
 
-        # 3. Генерация ссылки
-        download_url = f"{base_url}download/{output_filename}"
+        # публичный URL
+        download_url = f"{host_url}download/{mp3_filename}"
         logger.info(f"🔗 Download URL ready: {download_url}")
 
-        # 4. Отправляем в Telegram
-        send_to_telegram(client_id, download_url, name)
+        # отправка в Telegram
+        send_to_telegram(chat_id, download_url)
+
+        # удалить локальный файл через задержку
+        threading.Timer(30, lambda: os.remove(mp3_path)).start()
+        logger.info(f"🗑️ Will delete later: {mp3_path}")
 
     except Exception as e:
         logger.error(f"❌ Error in process_audio_task: {e}")
-    finally:
-        cleanup(voice_filename)
 
-
-# ==================== ЭНДПОИНТЫ ====================
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    """Принимаем webhook, отвечаем сразу, а работу делаем в фоне"""
     try:
         data = request.json or {}
         logger.info(f"📥 Incoming request: {data}")
 
         voice_url = data.get("voice_url")
-        client_id = data.get("client_id")
+        chat_id = data.get("chat_id") or data.get("platform_id")  # <-- ключевое
         name = data.get("name")
 
-        if not voice_url or not client_id:
-            return jsonify({"error": "voice_url and client_id required"}), 400
+        if not voice_url or not chat_id:
+            return jsonify({"error": "voice_url and chat_id required"}), 400
 
-        # Запускаем фоновую обработку
         threading.Thread(
             target=process_audio_task,
-            args=(voice_url, client_id, name, request.host_url),
+            args=(voice_url, chat_id, name, request.host_url),
             daemon=True
         ).start()
 
-        # Отвечаем быстро (чтобы SaleBot не отвалился по таймауту)
         return jsonify({
-            "client_id": client_id,
+            "chat_id": chat_id,
             "message": "🎤 Аудио принято в обработку",
             "status": "processing",
             "timestamp": time.time()
@@ -110,28 +98,10 @@ def process_audio():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/download/<filename>", methods=["GET"])
-def download_file(filename):
-    """Отдаём готовый файл клиенту"""
-    try:
-        safe_filename = os.path.basename(filename)
-        file_path = os.path.join(os.getcwd(), safe_filename)
-
-        if not os.path.exists(file_path):
-            return jsonify({"status": "error", "message": "File not found"}), 404
-
-        return send_file(
-            file_path,
-            as_attachment=True,
-            download_name=f"voice_mix_{safe_filename}"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ Download error: {e}")
-        return jsonify({"error": str(e)}), 500
+@app.route("/download/<filename>")
+def download(filename):
+    return send_from_directory(DOWNLOAD_FOLDER, filename)
 
 
-# ==================== ЗАПУСК ====================
 if __name__ == "__main__":
-    logger.info("🌐 Starting Flask server...")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=5000)
