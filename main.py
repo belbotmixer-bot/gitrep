@@ -1,107 +1,184 @@
+from flask import Flask, request, jsonify, send_file
 import os
-import time
 import uuid
-import logging
-import threading
+import time
 import requests
-from flask import Flask, request, jsonify, send_from_directory
+import logging
+from audio_processor import mix_voice_with_music
 
-# 🔧 Конфиг
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-
-DOWNLOAD_FOLDER = "downloads"
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# 📒 Логирование
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("main")
+# --- Конфигурация ---
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 
+# ==================== ЭНДПОИНТЫ ====================
 
-# 📤 Отправка в Telegram
-def send_to_telegram(chat_id, file_url):
+@app.route("/health")
+def health_check():
+    """Эндпоинт для проверки работоспособности"""
+    return jsonify({
+        "status": "healthy",
+        "service": "voice-mixer-api",
+        "timestamp": time.time(),
+        "version": "1.0"
+    })
+
+@app.route("/")
+def index():
+    """Главная страница"""
+    return "🎵 Voice Mixer Bot API is running! Use /health for status check."
+
+@app.route("/test", methods=["GET", "POST"])
+def test_endpoint():
+    """Тестовый эндпоинт для отладки"""
+    logger.info("✅ Тестовый запрос получен!")
+    logger.info(f"📋 Content-Type: {request.content_type}")
+    logger.info(f"📋 Headers: {dict(request.headers)}")
+    
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendAudio"
-        payload = {
-            "chat_id": chat_id,
-            "audio": file_url
-        }
-        resp = requests.post(url, data=payload, timeout=20)
-        logger.info(f"📤 Telegram response: {resp.text}")
-    except Exception as e:
-        logger.error(f"❌ Failed to send to Telegram: {e}")
-
-
-# 🎵 Обработка аудио
-def process_audio_task(voice_url, chat_id, name, host_url):
-    try:
-        logger.info(f"📥 Downloading from: {voice_url}")
-
-        # скачать .oga
-        file_id = str(uuid.uuid4())
-        ogg_path = os.path.join(DOWNLOAD_FOLDER, f"voice_{file_id}.ogg")
-        with requests.get(voice_url, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            with open(ogg_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
-        # эмуляция "микширования" -> переименуем в mp3
-        mp3_filename = f"mixed_{file_id}.mp3"
-        mp3_path = os.path.join(DOWNLOAD_FOLDER, mp3_filename)
-        os.rename(ogg_path, mp3_path)
-
-        # публичный URL
-        download_url = f"{host_url}download/{mp3_filename}"
-        logger.info(f"🔗 Download URL ready: {download_url}")
-
-        # отправка в Telegram
-        send_to_telegram(chat_id, download_url)
-
-        # удалить локальный файл через задержку
-        threading.Timer(30, lambda: os.remove(mp3_path)).start()
-        logger.info(f"🗑️ Will delete later: {mp3_path}")
-
-    except Exception as e:
-        logger.error(f"❌ Error in process_audio_task: {e}")
-
+        data = request.get_json()
+        logger.info(f"📦 JSON data: {data}")
+    except:
+        logger.info("📦 No JSON data")
+    
+    return jsonify({"status": "test_ok", "message": "Request received"})
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
+    """Основной эндпоинт для обработки аудио"""
+    logger.info("🎯 /process_audio endpoint called!")
+    
+    # Детальное логирование запроса
+    logger.info(f"📋 Content-Type: {request.content_type}")
+    logger.info(f"📋 Headers: {dict(request.headers)}")
+    
     try:
-        data = request.json or {}
-        logger.info(f"📥 Incoming request: {data}")
+        # Пробуем разные способы получить данные
+        data = None
+        if request.is_json:
+            data = request.get_json()
+            logger.info(f"📦 JSON data: {data}")
+        else:
+            # Пробуем форсировать JSON парсинг
+            data = request.get_json(force=True, silent=True)
+            if data:
+                logger.info(f"📦 Forced JSON data: {data}")
+            else:
+                # Пробуем form-data
+                data = request.form.to_dict()
+                logger.info(f"📦 Form data: {data}")
 
+        if not data:
+            logger.error("❌ No data received")
+            return jsonify({"error": "No data received"}), 400
+
+        # Извлекаем параметры из SaleBot переменных
         voice_url = data.get("voice_url")
-        chat_id = data.get("chat_id") or data.get("platform_id")  # <-- ключевое
-        name = data.get("name")
+        client_id = data.get("client_id")  # #{client_id}
+        name = data.get("name")            # #{name}
 
-        if not voice_url or not chat_id:
-            return jsonify({"error": "voice_url and chat_id required"}), 400
+        logger.info(f"🔍 voice_url: {voice_url}")
+        logger.info(f"🔍 client_id: {client_id}")
+        logger.info(f"🔍 name: {name}")
 
-        threading.Thread(
-            target=process_audio_task,
-            args=(voice_url, chat_id, name, request.host_url),
-            daemon=True
-        ).start()
+        if not voice_url:
+            logger.error("❌ voice_url is required")
+            return jsonify({"error": "voice_url is required"}), 400
 
-        return jsonify({
-            "chat_id": chat_id,
-            "message": "🎤 Аудио принято в обработку",
-            "status": "processing",
-            "timestamp": time.time()
-        }), 200
+        # 1. Скачиваем голосовое сообщение
+        logger.info(f"📥 Downloading from: {voice_url}")
+        try:
+            voice_response = requests.get(voice_url, timeout=30)
+            voice_response.raise_for_status()
+        except Exception as e:
+            logger.error(f"❌ Failed to download voice: {str(e)}")
+            return jsonify({"error": f"Failed to download voice: {str(e)}"}), 400
+
+        # 2. Сохраняем временный файл
+        voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
+        with open(voice_filename, "wb") as f:
+            f.write(voice_response.content)
+        logger.info(f"💾 Saved voice as: {voice_filename}")
+
+        # 3. Обрабатываем аудио
+        output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
+        output_path = os.path.join(os.getcwd(), output_filename)
+        
+        logger.info("🎵 Mixing audio with music...")
+        try:
+            mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
+            logger.info("✅ Audio mixed successfully")
+        except Exception as e:
+            logger.error(f"❌ Audio processing failed: {str(e)}")
+            cleanup(voice_filename)
+            return jsonify({"error": f"Audio processing failed: {str(e)}"}), 500
+
+        # 4. Создаем URL для скачивания
+        download_url = f"{request.host_url}download/{output_filename}"
+        logger.info(f"🔗 Download URL: {download_url}")
+
+        # 5. Очистка временных файлов (голосового)
+        cleanup(voice_filename)
+
+        # 6. Возвращаем ответ для SaleBot
+        response_data = {
+            "status": "success",
+            "message": "Audio processed successfully",
+            "download_url": download_url,
+            "file_name": output_filename,
+            "client_id": client_id,
+            "name": name,
+            "processed_at": time.time()
+        }
+        
+        logger.info(f"✅ Success: {response_data}")
+        return jsonify(response_data)
 
     except Exception as e:
-        logger.error(f"❌ Error in /process_audio: {e}")
+        logger.error(f"❌ Error in /process_audio: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+@app.route("/download/<filename>", methods=["GET"])
+def download_file(filename):
+    try:
+        # Проверяем безопасность пути
+        safe_filename = os.path.basename(filename)
+        file_path = os.path.join(os.getcwd(), safe_filename)
+        
+        if not os.path.exists(file_path) or '..' in filename or '/' in filename:
+            return jsonify({"status": "error", "message": "File not found"}), 404
+        
+        # ИСПРАВЛЕННЫЙ ВЫЗОВ - убрали as_attachment_filename
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=f"voice_mix_{safe_filename}"
+        )
+    
+    except Exception as e:
+        logging.error(f"❌ Download error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 404
+    except Exception as e:
+        logger.error(f"❌ Download error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
-@app.route("/download/<filename>")
-def download(filename):
-    return send_from_directory(DOWNLOAD_FOLDER, filename)
+def cleanup(filename):
+    """Удаление временных файлов после обработки"""
+    try:
+        if os.path.exists(filename):
+            os.remove(filename)
+            logger.info(f"🗑️ Deleted: {filename}")
+    except Exception as e:
+        logger.error(f"⚠️ Cleanup error for {filename}: {e}")
 
-
+# ==================== ЗАПУСК СЕРВЕРА ====================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    logger.info("🌐 Starting Flask server...")
+    app.run(host="0.0.0.0", port=5000, debug=False)
