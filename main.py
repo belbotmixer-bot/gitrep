@@ -4,7 +4,7 @@ import uuid
 import requests
 import logging
 import threading
-import time   # ✅ добавлен импорт
+import time
 from audio_processor import mix_voice_with_music
 
 # --- Логирование ---
@@ -15,7 +15,6 @@ app = Flask(__name__)
 
 # --- Конфигурация ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY", "YOUR_SALEBOT_KEY")
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 
 # ==================== УТИЛИТЫ ====================
@@ -30,25 +29,22 @@ def cleanup(filename):
         logger.error(f"⚠️ Cleanup error for {filename}: {e}")
 
 
-def notify_salebot(client_id, download_url, name=""):
-    """Обновляем custom_answer клиента в SaleBot"""
-    url = f"https://chatter.salebot.pro/api/update_client/{SALEBOT_API_KEY}/{client_id}"
+def send_to_telegram(chat_id, download_url, name=""):
+    """Отправляем ссылку на готовый файл в Telegram"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
-        "custom_answer": str({
-            "download_url": download_url,
-            "status": "success",
-            "message": "🎵 Аудио готово!"
-        })
+        "chat_id": chat_id,
+        "text": f"🎵 Привет {name or ''}! Вот твой готовый микс: {download_url}"
     }
     try:
         r = requests.post(url, json=payload, timeout=10)
-        logger.info(f"📤 Notify SaleBot response: {r.text}")
+        logger.info(f"📤 Telegram response: {r.text}")
     except Exception as e:
-        logger.error(f"❌ Failed to notify SaleBot: {e}")
+        logger.error(f"❌ Failed to send Telegram message: {e}")
 
 
 def process_audio_task(voice_url, client_id, name, base_url):
-    """Фоновая задача: качаем → миксуем → шлём ссылку в SaleBot"""
+    """Фоновая задача: качаем → миксуем → шлём ссылку в Telegram"""
     voice_filename = None
     try:
         # 1. Скачиваем голос
@@ -69,8 +65,8 @@ def process_audio_task(voice_url, client_id, name, base_url):
         download_url = f"{base_url}download/{output_filename}"
         logger.info(f"🔗 Download URL ready: {download_url}")
 
-        # 4. Уведомляем SaleBot
-        notify_salebot(client_id, download_url, name)
+        # 4. Отправляем в Telegram
+        send_to_telegram(client_id, download_url, name)
 
     except Exception as e:
         logger.error(f"❌ Error in process_audio_task: {e}")
