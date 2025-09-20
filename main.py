@@ -61,13 +61,27 @@ def process_audio():
         data = request.json
         logger.info(f"📥 Пришёл tg_request: {data}")
 
+        # Достаём message
         message = data.get("message", {})
         chat_id = message.get("chat", {}).get("id")
         voice = message.get("voice", {})
         file_id = voice.get("file_id")
 
         if not chat_id or not file_id:
+            logger.warning("⚠️ Нет chat_id или file_id в запросе")
             return jsonify({"error": "Нет chat_id или file_id"}), 400
+
+        logger.info(f"✅ Нашли chat_id={chat_id}, file_id={file_id}")
+
+        return jsonify({
+            "status": "ok",
+            "chat_id": chat_id,
+            "file_id": file_id
+        }), 200
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка в /process_audio: {e}")
+        return jsonify({"error": str(e)}), 500
 
         # 1. Скачиваем голосовое сообщение
         voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
