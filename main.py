@@ -35,13 +35,13 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "3.2"
+        "version": "3.1"
     })
 
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram с кнопкой"""
+    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram"""
     task_id = uuid.uuid4().hex[:8]  # короткий ID для отслеживания
     logger.info(f"[task_id={task_id}] 🎯 /process_audio called")
 
@@ -77,15 +77,22 @@ def process_audio():
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"[task_id={task_id}] 🎵 Mixed audio created: {output_filename} ({os.path.getsize(output_filename)} bytes)")
 
-        # --- Отправляем файл в Telegram ---
+        # --- Отправляем файл в Telegram с кнопкой callback ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
             payload = {
                 "chat_id": client_id,
-                "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
+                "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!",
+                "reply_markup": {
+                    "inline_keyboard": [
+                        [{"text": "Сохранить ссылку на микс", "callback_data": f"save_mix:{task_id}"}]
+                    ]
+                }
             }
-            tg_resp = requests.post(send_url, data=payload, files=files, timeout=300)
+            tg_resp = requests.post(send_url, data={"chat_id": client_id, "caption": payload["caption"], 
+                                                    "reply_markup": json.dumps(payload["reply_markup"])},
+                                    files=files, timeout=300)
 
         try:
             tg_json = tg_resp.json()
@@ -98,33 +105,6 @@ def process_audio():
             logger.error(f"[task_id={task_id}] ❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio to Telegram", "task_id": task_id}), 500
 
-        telegram_file_id = tg_json["result"]["audio"]["file_id"]
-
-        # --- Отправляем кнопку с ссылкой на микс ---
-        # Можно использовать file_id для ссылки на файл или прямую ссылку на сообщение
-        button_payload = {
-            "chat_id": client_id,
-            "text": "🎵 Нажмите кнопку, чтобы сохранить ссылку на ваш микс:",
-            "reply_markup": {
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "Сохранить ссылку",
-                            "url": f"https://t.me/c/{client_id}/{tg_json['result']['message_id']}"
-                        }
-                    ]
-                ]
-            }
-        }
-
-        send_button_url = f"{TELEGRAM_API_URL}/sendMessage"
-        button_resp = requests.post(send_button_url, json=button_payload, timeout=30)
-        try:
-            button_json = button_resp.json()
-        except Exception:
-            button_json = {"raw_text": button_resp.text}
-        logger.info(f"[task_id={task_id}] 📦 Telegram button response: {button_json}")
-
         # --- Очистка ---
         cleanup(voice_filename, task_id)
         cleanup(output_filename, task_id)
@@ -135,8 +115,7 @@ def process_audio():
             "client_id": client_id,
             "name": name,
             "processed_at": time.time(),
-            "telegram_file_id": telegram_file_id,
-            "button_message_id": button_json.get("result", {}).get("message_id")
+            "telegram_file_id": tg_json["result"]["audio"]["file_id"]
         })
 
     except Exception as e:
@@ -144,6 +123,34 @@ def process_audio():
         import traceback
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e), "task_id": task_id}), 500
+
+
+@app.route("/callback_query", methods=["POST"])
+def handle_callback():
+    """Обработчик callback от кнопки в Telegram"""
+    try:
+        data = request.get_json()
+        callback_data = data["callback_query"]["data"]
+        chat_id = data["callback_query"]["message"]["chat"]["id"]
+        message_id = data["callback_query"]["message"]["message_id"]
+
+        logger.info(f"Callback received: {callback_data} from chat {chat_id}")
+
+        if callback_data.startswith("save_mix:"):
+            task_id = callback_data.split(":")[1]
+            # Здесь можно отправить task_id или file_id в Salebot через API
+            logger.info(f"User wants to save mix: {task_id}")
+
+            # Ответ на callback (убирает "часики" в Telegram)
+            requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", data={
+                "callback_query_id": data["callback_query"]["id"],
+                "text": "Ссылка на микс сохранена!"
+            })
+
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        logger.error(f"❌ Error in /callback_query: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
