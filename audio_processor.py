@@ -33,3 +33,13 @@ def mix_voice_with_music(voice_file, output_file, music_url):
     # --- Сохраняем ---
     mixed.export(output_file, format="mp3")
     logger.info(f"✅ Mixed saved: {output_file}, duration={mixed.duration_seconds:.2f}s, size={len(mixed)} frames")
+
+
+# --- Обёртка для main.py ---
+async def process_audio(voice_file: str) -> str:
+    """Асинхронная обёртка для микширования"""
+    output_file = f"mixed_{voice_file.replace('.ogg', '.mp3')}"
+    # Здесь можно подставить любой дефолтный трек
+    music_url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+    mix_voice_with_music(voice_file, output_file, music_url)
+    return output_file
