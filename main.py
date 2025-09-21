@@ -35,13 +35,13 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "3.1"
+        "version": "3.2"
     })
 
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram"""
+    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram с кнопкой"""
     task_id = uuid.uuid4().hex[:8]  # короткий ID для отслеживания
     logger.info(f"[task_id={task_id}] 🎯 /process_audio called")
 
@@ -98,6 +98,33 @@ def process_audio():
             logger.error(f"[task_id={task_id}] ❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio to Telegram", "task_id": task_id}), 500
 
+        telegram_file_id = tg_json["result"]["audio"]["file_id"]
+
+        # --- Отправляем кнопку с ссылкой на микс ---
+        # Можно использовать file_id для ссылки на файл или прямую ссылку на сообщение
+        button_payload = {
+            "chat_id": client_id,
+            "text": "🎵 Нажмите кнопку, чтобы сохранить ссылку на ваш микс:",
+            "reply_markup": {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "Сохранить ссылку",
+                            "url": f"https://t.me/c/{client_id}/{tg_json['result']['message_id']}"
+                        }
+                    ]
+                ]
+            }
+        }
+
+        send_button_url = f"{TELEGRAM_API_URL}/sendMessage"
+        button_resp = requests.post(send_button_url, json=button_payload, timeout=30)
+        try:
+            button_json = button_resp.json()
+        except Exception:
+            button_json = {"raw_text": button_resp.text}
+        logger.info(f"[task_id={task_id}] 📦 Telegram button response: {button_json}")
+
         # --- Очистка ---
         cleanup(voice_filename, task_id)
         cleanup(output_filename, task_id)
@@ -108,7 +135,8 @@ def process_audio():
             "client_id": client_id,
             "name": name,
             "processed_at": time.time(),
-            "telegram_file_id": tg_json["result"]["audio"]["file_id"]
+            "telegram_file_id": telegram_file_id,
+            "button_message_id": button_json.get("result", {}).get("message_id")
         })
 
     except Exception as e:
