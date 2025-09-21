@@ -15,11 +15,10 @@ app = Flask(__name__)
 # --- Конфигурация ---
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
-
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
-def cleanup(filename):
+def cleanup(filename: str):
     """Удаление временных файлов после обработки"""
     try:
         if filename and os.path.exists(filename):
@@ -36,7 +35,7 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "2.1"
+        "version": "2.2"
     })
 
 
@@ -47,7 +46,6 @@ def process_audio():
 
     try:
         # --- Получаем данные из вебхука ---
-        data = None
         if request.is_json:
             data = request.get_json()
         else:
@@ -78,15 +76,15 @@ def process_audio():
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"🎵 Mixed audio created: {output_filename}")
 
-        # 3. Отправляем файл в Telegram (обход кеша через sendDocument)
-send_url = f"{TELEGRAM_API_URL}/sendDocument"
-with open(output_filename, "rb") as audio_file:
-    files = {"document": (f"{uuid.uuid4().hex}.mp3", audio_file, "audio/mpeg")}
-    payload = {
-        "chat_id": client_id,
-        "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
-    }
-    tg_resp = requests.post(send_url, data=payload, files=files, timeout=120)
+        # --- Отправляем файл в Telegram (через sendDocument для обхода кеша) ---
+        send_url = f"{TELEGRAM_API_URL}/sendDocument"
+        with open(output_filename, "rb") as audio_file:
+            files = {"document": (f"{uuid.uuid4().hex}.mp3", audio_file, "audio/mpeg")}
+            payload = {
+                "chat_id": client_id,
+                "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
+            }
+            tg_resp = requests.post(send_url, data=payload, files=files, timeout=120)
 
         try:
             tg_json = tg_resp.json()
@@ -99,6 +97,8 @@ with open(output_filename, "rb") as audio_file:
             logger.error(f"❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio to Telegram"}), 500
 
+        logger.info(f"✅ Sent to Telegram chat {client_id}")
+
         # --- Очистка ---
         cleanup(voice_filename)
         cleanup(output_filename)
@@ -108,26 +108,7 @@ with open(output_filename, "rb") as audio_file:
             "client_id": client_id,
             "name": name,
             "processed_at": time.time(),
-            "telegram_file_id": tg_json["result"]["audio"]["file_id"]
-        })
-
-    except Exception as e:
-        logger.error(f"❌ Error in /process_audio: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
-
-        logger.info(f"✅ Sent to Telegram chat {chat_id}")
-
-        # 4. Очистка
-        cleanup(voice_filename)
-        cleanup(output_filename)
-
-        return jsonify({
-            "status": "sent_to_telegram",
-            "client_id": chat_id,
-            "name": name,
-            "processed_at": time.time()
+            "telegram_file_id": tg_json["result"]["document"]["file_id"]
         })
 
     except Exception as e:
