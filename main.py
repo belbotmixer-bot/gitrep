@@ -14,6 +14,7 @@ app = Flask(__name__)
 
 # --- Конфигурация ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY", "YOUR_SALEBOT_API_KEY_HERE")
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
@@ -35,13 +36,13 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "4.0"
+        "version": "3.1"
     })
 
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram → возвращаем ссылку"""
+    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram + Salebot"""
     logger.info("🎯 /process_audio called")
 
     try:
@@ -55,7 +56,7 @@ def process_audio():
             return jsonify({"error": "No data received"}), 400
 
         voice_url = data.get("voice_url")
-        client_id = data.get("client_id")  # chat_id в Telegram
+        client_id = data.get("client_id")  # chat_id в Telegram и в Salebot
         name = data.get("name", "")
 
         logger.info(f"🔍 voice_url={voice_url}, client_id={client_id}, name={name}")
@@ -97,39 +98,32 @@ def process_audio():
             logger.error(f"❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio to Telegram"}), 500
 
-        # --- Получаем file_id ---
+        # --- Получаем file_id и cdn_url ---
         file_id = tg_json["result"]["audio"]["file_id"]
-
-        # --- Достаём file_path через getFile ---
-        getfile_url = f"{TELEGRAM_API_URL}/getFile"
-        gf_resp = requests.get(getfile_url, params={"file_id": file_id}, timeout=60)
-        gf_json = gf_resp.json()
-        logger.info(f"📦 getFile response: {gf_json}")
-
-        if not gf_json.get("ok"):
-            return jsonify({"error": "Failed to get file_path from Telegram"}), 500
-
-        file_path = gf_json["result"]["file_path"]
-
-        # --- Формируем прямой CDN URL ---
+        get_file_url = f"{TELEGRAM_API_URL}/getFile?file_id={file_id}"
+        file_info = requests.get(get_file_url).json()
+        file_path = file_info["result"]["file_path"]
         cdn_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+        logger.info(f"🌍 CDN URL: {cdn_url}")
 
-        # --- Отправляем ссылку пользователю ---
-        send_url2 = f"{TELEGRAM_API_URL}/sendMessage"
-        payload2 = {
-            "chat_id": client_id,
-            "text": f"🔗 Ваша ссылка на микс:\n{cdn_url}"
+        # --- Отправляем ссылку в Salebot ---
+        salebot_url = f"https://chatter.salebot.pro/api/{SALEBOT_API_KEY}/callback"
+        salebot_payload = {
+            "client_id": client_id,
+            "message": f"Ссылка на ваш микс: {cdn_url}"
         }
-        requests.post(send_url2, data=payload2, timeout=60)
-
-        logger.info(f"✅ CDN link sent: {cdn_url}")
+        try:
+            sb_resp = requests.post(salebot_url, json=salebot_payload, timeout=30)
+            logger.info(f"📨 Salebot callback response: {sb_resp.status_code}, {sb_resp.text}")
+        except Exception as e:
+            logger.error(f"❌ Error sending callback to Salebot: {e}")
 
         # --- Очистка ---
         cleanup(voice_filename)
         cleanup(output_filename)
 
         return jsonify({
-            "status": "sent_to_telegram",
+            "status": "sent_to_telegram_and_salebot",
             "client_id": client_id,
             "name": name,
             "processed_at": time.time(),
