@@ -55,6 +55,8 @@ def upload_voice():
             return jsonify({"error": "voice_url and client_id required"}), 400
 
         job_id = str(uuid.uuid4())
+        host_url = request.host_url  # 💡 сохраняем контекст заранее
+
         logger.info(f"📥 Upload voice for client {client_id} (job_id={job_id}) from {voice_url}")
 
         # Сохраняем задачу
@@ -80,7 +82,8 @@ def upload_voice():
                 output_path = os.path.join(os.getcwd(), output_filename)
                 mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
 
-                download_url = f"{request.host_url}download/{output_filename}"
+                # ⚡ используем сохранённый host_url
+                download_url = f"{host_url}download/{output_filename}"
 
                 MIX_STORAGE[job_id].update({
                     "status": "ready",
@@ -109,41 +112,6 @@ def upload_voice():
     except Exception as e:
         logger.error(f"❌ Error in /upload_voice: {e}")
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/get_result/<job_id>", methods=["GET", "POST"])
-def get_result(job_id):
-    """Получение статуса обработки по job_id"""
-    entry = MIX_STORAGE.get(job_id)
-
-    if not entry:
-        return jsonify({
-            "status": "not_found",
-            "message": f"❌ Нет данных для job_id={job_id}"
-        }), 404
-
-    if entry["status"] == "processing":
-        return jsonify({
-            "status": "processing",
-            "message": "⌛ Микс ещё готовится",
-            "job_id": job_id
-        }), 200
-
-    if entry["status"] == "ready":
-        return jsonify({
-            "status": "success",
-            "message": "🎵 Микс готов",
-            "download_url": entry["url"],
-            "job_id": job_id,
-            "client_id": entry["client_id"],
-            "name": entry.get("name", "")
-        }), 200
-
-    return jsonify({
-        "status": "error",
-        "message": entry.get("error", "Неизвестная ошибка"),
-        "job_id": job_id
-    }), 500
 
 
 @app.route("/download/<filename>", methods=["GET"])
