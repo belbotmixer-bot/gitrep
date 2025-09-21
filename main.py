@@ -46,7 +46,7 @@ def process_audio():
     logger.info("🎯 /process_audio called")
 
     try:
-        # Получаем данные
+        # --- Получаем данные из вебхука ---
         data = None
         if request.is_json:
             data = request.get_json()
@@ -57,7 +57,7 @@ def process_audio():
             return jsonify({"error": "No data received"}), 400
 
         voice_url = data.get("voice_url")
-        client_id = data.get("client_id")  # сюда из SaleBot прилетает #{platform_id}
+        client_id = data.get("client_id")  # chat_id в Telegram
         name = data.get("name", "")
 
         logger.info(f"🔍 voice_url={voice_url}, client_id={client_id}, name={name}")
@@ -65,14 +65,7 @@ def process_audio():
         if not voice_url or not client_id:
             return jsonify({"error": "voice_url and client_id required"}), 400
 
-        # --- Обработка chat_id ---
-        chat_id = str(client_id).strip()
-        if "@telegram" in chat_id:
-            chat_id = chat_id.split("@")[0]
-
-        logger.info(f"✅ Using chat_id={chat_id}")
-
-        # 1. Скачиваем голосовое сообщение
+        # --- Скачиваем голосовое ---
         voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
         resp = requests.get(voice_url, timeout=60)
         resp.raise_for_status()
@@ -80,24 +73,50 @@ def process_audio():
             f.write(resp.content)
         logger.info(f"📥 Voice saved as {voice_filename}")
 
-        # 2. Миксуем с музыкой
+        # --- Миксуем с музыкой ---
         output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"🎵 Mixed audio created: {output_filename}")
 
-        # 3. Отправляем файл в Telegram
+        # --- Отправляем в Telegram ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": audio_file}
             payload = {
-                "chat_id": chat_id,
-                "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
+                "chat_id": client_id,
+                "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!",
+                "title": f"Mix_{uuid.uuid4().hex}"  # 👈 ломаем кэш Telegram
             }
             tg_resp = requests.post(send_url, data=payload, files=files, timeout=120)
 
-        if tg_resp.status_code != 200:
-            logger.error(f"❌ Telegram API error: {tg_resp.text}")
+        try:
+            tg_json = tg_resp.json()
+        except Exception:
+            tg_json = {"raw_text": tg_resp.text}
+
+        logger.info(f"📦 Telegram response: {tg_json}")
+
+        if tg_resp.status_code != 200 or not tg_json.get("ok"):
+            logger.error(f"❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio to Telegram"}), 500
+
+        # --- Очистка ---
+        cleanup(voice_filename)
+        cleanup(output_filename)
+
+        return jsonify({
+            "status": "sent_to_telegram",
+            "client_id": client_id,
+            "name": name,
+            "processed_at": time.time(),
+            "telegram_file_id": tg_json["result"]["audio"]["file_id"]
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error in /process_audio: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
 
         logger.info(f"✅ Sent to Telegram chat {chat_id}")
 
