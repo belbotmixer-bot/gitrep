@@ -12,15 +12,15 @@ logging.basicConfig(level=logging.INFO, format="INFO:main:%(message)s")
 logger = logging.getLogger("main")
 
 # --- Переменные окружения ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 SALEBOT_API_KEY = os.getenv("SALEBOT_API_KEY")
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("❌ TELEGRAM_TOKEN не задан в переменных окружения")
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("❌ TELEGRAM_BOT_TOKEN не задан в переменных окружения")
 if not SALEBOT_API_KEY:
     raise ValueError("❌ SALEBOT_API_KEY не задан в переменных окружения")
 
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 app = FastAPI()
 
@@ -65,7 +65,7 @@ async def process_audio_handler(request: Request):
     file_id = tg_json["result"]["audio"]["file_id"]
     file_info = requests.get(f"{TELEGRAM_API}/getFile", params={"file_id": file_id}).json()
     file_path = file_info["result"]["file_path"]
-    cdn_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+    cdn_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
     logger.info(f"🌍 CDN URL: {cdn_url}")
 
     # --- Сохраняем переменную в Salebot ---
