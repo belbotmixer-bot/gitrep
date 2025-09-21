@@ -44,7 +44,6 @@ def health_check():
 
 @app.route("/upload_voice", methods=["POST"])
 def upload_voice():
-    """Принимаем голосовое, создаём job_id и запускаем фоновую обработку"""
     try:
         data = request.get_json(force=True)
         voice_url = data.get("voice_url")
@@ -56,6 +55,7 @@ def upload_voice():
 
         # Генерируем job_id
         job_id = str(uuid.uuid4())
+        base_url = request.host_url  # ⚡ сохраняем сразу
 
         logger.info(f"📥 Upload voice for client {client_id} (job_id={job_id}) from {voice_url}")
 
@@ -78,15 +78,13 @@ def upload_voice():
                 with open(voice_filename, "wb") as f:
                     f.write(resp.content)
 
-                # Миксуем
                 output_filename = f"mixed_{job_id}.mp3"
                 output_path = os.path.join(os.getcwd(), output_filename)
                 mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
 
-                # Генерируем URL
-                download_url = f"{request.host_url}download/{output_filename}"
+                # ⚡ используем сохранённый base_url
+                download_url = f"{base_url}download/{output_filename}"
 
-                # Обновляем
                 MIX_STORAGE[job_id].update({
                     "status": "ready",
                     "file": output_path,
@@ -115,7 +113,6 @@ def upload_voice():
     except Exception as e:
         logger.error(f"❌ Error in /upload_voice: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/get_mix/<job_id>", methods=["GET", "POST"])
 def get_mix(job_id):
