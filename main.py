@@ -69,7 +69,7 @@ def process_audio():
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"[task_id={task_id}] 🎵 Mixed audio created: {output_filename}")
 
-        # --- Отправляем файл с кнопкой ---
+        # --- Отправляем файл в Telegram ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
@@ -79,11 +79,7 @@ def process_audio():
             }
             tg_resp = requests.post(send_url, data=tg_payload, files=files, timeout=300)
 
-        try:
-            tg_json = tg_resp.json()
-        except Exception:
-            tg_json = {"raw_text": tg_resp.text}
-
+        tg_json = tg_resp.json() if tg_resp.ok else {"raw_text": tg_resp.text}
         if tg_resp.status_code != 200 or not tg_json.get("ok"):
             logger.error(f"[task_id={task_id}] ❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio", "task_id": task_id}), 500
@@ -91,7 +87,7 @@ def process_audio():
         # --- Берём file_id ---
         file_id = tg_json["result"]["audio"]["file_id"]
 
-        # --- Отправляем кнопку с callback_data = file_id ---
+        # --- Отправляем сообщение с inline-кнопкой и callback_data = file_id ---
         reply_markup = {
             "inline_keyboard": [
                 [{"text": "💾 Сохранить ссылку", "callback_data": file_id}]
