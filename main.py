@@ -103,12 +103,20 @@ def process_audio():
         cleanup(voice_filename)
         cleanup(output_filename)
 
+        # Безопасно достаем file_id
+        file_id = None
+        if "result" in tg_json:
+            if "document" in tg_json["result"]:
+                file_id = tg_json["result"]["document"]["file_id"]
+            elif "audio" in tg_json["result"]:
+                file_id = tg_json["result"]["audio"]["file_id"]
+
         return jsonify({
             "status": "sent_to_telegram",
             "client_id": client_id,
             "name": name,
             "processed_at": time.time(),
-            "telegram_file_id": tg_json["result"]["document"]["file_id"]
+            "telegram_file_id": file_id
         })
 
     except Exception as e:
