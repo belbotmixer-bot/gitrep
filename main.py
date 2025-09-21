@@ -36,7 +36,7 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "2.0"
+        "version": "2.1"
     })
 
 
@@ -46,6 +46,7 @@ def process_audio():
     logger.info("🎯 /process_audio called")
 
     try:
+        # Получаем данные
         data = None
         if request.is_json:
             data = request.get_json()
@@ -56,13 +57,20 @@ def process_audio():
             return jsonify({"error": "No data received"}), 400
 
         voice_url = data.get("voice_url")
-        client_id = data.get("client_id")  # chat_id в Telegram
+        client_id = data.get("client_id")  # сюда из SaleBot прилетает #{platform_id}
         name = data.get("name", "")
 
         logger.info(f"🔍 voice_url={voice_url}, client_id={client_id}, name={name}")
 
         if not voice_url or not client_id:
             return jsonify({"error": "voice_url and client_id required"}), 400
+
+        # --- Обработка chat_id ---
+        chat_id = str(client_id).strip()
+        if "@telegram" in chat_id:
+            chat_id = chat_id.split("@")[0]
+
+        logger.info(f"✅ Using chat_id={chat_id}")
 
         # 1. Скачиваем голосовое сообщение
         voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
@@ -82,7 +90,7 @@ def process_audio():
         with open(output_filename, "rb") as audio_file:
             files = {"audio": audio_file}
             payload = {
-                "chat_id": client_id,
+                "chat_id": chat_id,
                 "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
             }
             tg_resp = requests.post(send_url, data=payload, files=files, timeout=120)
@@ -91,7 +99,7 @@ def process_audio():
             logger.error(f"❌ Telegram API error: {tg_resp.text}")
             return jsonify({"error": "Failed to send audio to Telegram"}), 500
 
-        logger.info(f"✅ Sent to Telegram chat {client_id}")
+        logger.info(f"✅ Sent to Telegram chat {chat_id}")
 
         # 4. Очистка
         cleanup(voice_filename)
@@ -99,7 +107,7 @@ def process_audio():
 
         return jsonify({
             "status": "sent_to_telegram",
-            "client_id": client_id,
+            "client_id": chat_id,
             "name": name,
             "processed_at": time.time()
         })
