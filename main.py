@@ -17,6 +17,7 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+TELEGRAM_BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "PRISM_MAX_BOT")
 
 
 def cleanup(filename, task_id=None):
@@ -69,15 +70,15 @@ def process_audio():
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"[task_id={task_id}] 🎵 Mixed audio created: {output_filename}")
 
-        # --- Отправляем файл с кнопкой ---
+        # --- Отправляем файл с inline-кнопкой ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
-            # callback_data содержит task_id для уникальной идентификации микса
+            # callback_data содержит task_id для Salebot
             reply_markup = {
-                "inline_keyboard": [
-                    [{"text": "💾 Сохранить ссылку", "callback_data": f"save_mix:{task_id}"}]
-                ]
+                "inline_keyboard": [[
+                    {"text": "💾 Сохранить ссылку на микс", "callback_data": f"save_mix:{task_id}"}
+                ]]
             }
             payload = {
                 "chat_id": client_id,
@@ -97,6 +98,10 @@ def process_audio():
             logger.error(f"[task_id={task_id}] ❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio", "task_id": task_id}), 500
 
+        # --- Формируем ссылку для Salebot (callback) ---
+        # Salebot в блоке колбэк проверяет tg_request.callback_query.data.startswith("save_mix:")
+        mix_url = f"https://t.me/{TELEGRAM_BOT_USERNAME}?voice={tg_json['result']['audio']['file_id']}"
+
         cleanup(voice_filename, task_id)
         cleanup(output_filename, task_id)
 
@@ -104,7 +109,8 @@ def process_audio():
             "status": "sent_to_telegram",
             "task_id": task_id,
             "client_id": client_id,
-            "telegram_file_id": tg_json["result"]["audio"]["file_id"]
+            "telegram_file_id": tg_json["result"]["audio"]["file_id"],
+            "mix_url": mix_url
         })
 
     except Exception as e:
