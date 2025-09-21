@@ -42,111 +42,39 @@ def health_check():
     })
 
 
-@app.route("/upload_voice", methods=["POST"])
-def upload_voice():
-    try:
-        data = request.get_json(force=True)
-        voice_url = data.get("voice_url")
-        client_id = data.get("client_id")
-        name = data.get("name", "")
+@app.route("/get_result/<job_id>", methods=["GET", "POST"])
+def get_result(job_id):
+    """Получение статуса обработки по job_id"""
+    entry = MIX_STORAGE.get(job_id)
 
-        if not voice_url or not client_id:
-            return jsonify({"error": "voice_url and client_id required"}), 400
-
-        # Генерируем job_id
-        job_id = str(uuid.uuid4())
-        base_url = request.host_url  # ⚡ сохраняем сразу
-
-        logger.info(f"📥 Upload voice for client {client_id} (job_id={job_id}) from {voice_url}")
-
-        # Сохраняем статус
-        MIX_STORAGE[job_id] = {
-            "status": "processing",
-            "file": None,
-            "url": None,
-            "client_id": client_id,
-            "name": name,
-            "requested_at": time.time()
-        }
-
-        def process_task():
-            try:
-                resp = requests.get(voice_url, timeout=60)
-                resp.raise_for_status()
-
-                voice_filename = f"voice_{job_id}.ogg"
-                with open(voice_filename, "wb") as f:
-                    f.write(resp.content)
-
-                output_filename = f"mixed_{job_id}.mp3"
-                output_path = os.path.join(os.getcwd(), output_filename)
-                mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
-
-                # ⚡ используем сохранённый base_url
-                download_url = f"{base_url}download/{output_filename}"
-
-                MIX_STORAGE[job_id].update({
-                    "status": "ready",
-                    "file": output_path,
-                    "url": download_url,
-                    "finished_at": time.time()
-                })
-
-                cleanup(voice_filename)
-                logger.info(f"✅ Mix ready (job_id={job_id}): {download_url}")
-
-            except Exception as e:
-                MIX_STORAGE[job_id]["status"] = "error"
-                MIX_STORAGE[job_id]["error"] = str(e)
-                logger.error(f"❌ Error processing job {job_id}: {e}")
-
-        threading.Thread(target=process_task, daemon=True).start()
-
+    if not entry:
         return jsonify({
-            "status": "processing",
-            "job_id": job_id,
-            "client_id": client_id,
-            "name": name,
-            "requested_at": time.time()
-        })
+            "status": "not_found",
+            "message": f"❌ Нет данных для job_id={job_id}"
+        }), 404
 
-    except Exception as e:
-        logger.error(f"❌ Error in /upload_voice: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/get_mix/<job_id>", methods=["GET", "POST"])
-def get_mix(job_id):
-    """Отдаём готовый микс по job_id"""
-    job = MIX_STORAGE.get(job_id)
-
-    if not job:
-        return jsonify({"status": "not_found", "message": f"Job {job_id} не найден"}), 404
-
-    if job["status"] == "processing":
+    if entry["status"] == "processing":
         return jsonify({
             "status": "processing",
             "message": "⌛ Микс ещё готовится",
-            "job_id": job_id,
-            "client_id": job["client_id"]
-        })
-
-    if job["status"] == "ready":
-        return jsonify({
-            "status": "ready",
-            "message": "🎵 Микс готов",
-            "job_id": job_id,
-            "client_id": job["client_id"],
-            "download_url": job["url"]
-        })
-
-    if job["status"] == "error":
-        return jsonify({
-            "status": "error",
-            "message": f"❌ Ошибка при обработке: {job.get('error')}",
             "job_id": job_id
-        }), 500
+        }), 200
 
-    return jsonify({"status": "unknown", "job_id": job_id}), 500
+    if entry["status"] == "ready":
+        return jsonify({
+            "status": "success",
+            "message": "🎵 Микс готов",
+            "download_url": entry["url"],
+            "job_id": job_id,
+            "client_id": entry["client_id"],
+            "name": entry.get("name", "")
+        }), 200
+
+    return jsonify({
+        "status": "error",
+        "message": entry.get("error", "Неизвестная ошибка"),
+        "job_id": job_id
+    }), 500
 
 
 @app.route("/download/<filename>", methods=["GET"])
