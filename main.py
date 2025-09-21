@@ -4,10 +4,9 @@ import uuid
 import time
 import requests
 import logging
-import shutil
 from audio_processor import mix_voice_with_music
 
-# --- Логирование ---
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -19,23 +18,34 @@ GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/mai
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
+def cleanup(filename):
+    """Удаление временных файлов после обработки"""
+    try:
+        if filename and os.path.exists(filename):
+            os.remove(filename)
+            logger.info(f"🗑️ Deleted: {filename}")
+    except Exception as e:
+        logger.error(f"⚠️ Cleanup error for {filename}: {e}")
+
+
 @app.route("/health")
 def health_check():
+    """Эндпоинт для проверки работоспособности"""
     return jsonify({
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "debug-file-size"
+        "version": "3.0"
     })
 
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
+    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram"""
     logger.info("🎯 /process_audio called")
 
     try:
-        # --- Получение данных из вебхука ---
-        data = None
+        # --- Получаем данные из вебхука ---
         if request.is_json:
             data = request.get_json()
         else:
@@ -45,7 +55,7 @@ def process_audio():
             return jsonify({"error": "No data received"}), 400
 
         voice_url = data.get("voice_url")
-        client_id = data.get("client_id")
+        client_id = data.get("client_id")  # chat_id в Telegram
         name = data.get("name", "")
 
         logger.info(f"🔍 voice_url={voice_url}, client_id={client_id}, name={name}")
@@ -53,7 +63,7 @@ def process_audio():
         if not voice_url or not client_id:
             return jsonify({"error": "voice_url and client_id required"}), 400
 
-        # --- Скачивание голосового ---
+        # --- Скачиваем голосовое ---
         voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
         resp = requests.get(voice_url, timeout=60)
         resp.raise_for_status()
@@ -61,21 +71,15 @@ def process_audio():
             f.write(resp.content)
         logger.info(f"📥 Voice saved as {voice_filename} ({os.path.getsize(voice_filename)} bytes)")
 
-        # --- Миксинг с музыкой ---
-        tmp_output = f"tmp_{uuid.uuid4().hex}.mp3"
-        final_output = f"mixed_{uuid.uuid4().hex}.mp3"
+        # --- Миксуем с музыкой ---
+        output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
+        mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
+        logger.info(f"🎵 Mixed audio created: {output_filename} ({os.path.getsize(output_filename)} bytes)")
 
-        mix_voice_with_music(voice_filename, tmp_output, GITHUB_MUSIC_URL)
-
-        # Перемещаем в финальный файл (чтобы не было недозаписанных)
-        shutil.move(tmp_output, final_output)
-
-        logger.info(f"🎵 Mixed audio created: {final_output} ({os.path.getsize(final_output)} bytes)")
-
-        # --- Отправка в Telegram ---
-        send_url = f"{TELEGRAM_API_URL}/sendDocument"
-        with open(final_output, "rb") as audio_file:
-            files = {"document": (f"{uuid.uuid4().hex}.mp3", audio_file, "audio/mpeg")}
+        # --- Отправляем файл в Telegram ---
+        send_url = f"{TELEGRAM_API_URL}/sendAudio"
+        with open(output_filename, "rb") as audio_file:
+            files = {"audio": (f"{uuid.uuid4().hex}.mp3", audio_file, "audio/mpeg")}
             payload = {
                 "chat_id": client_id,
                 "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
@@ -93,16 +97,16 @@ def process_audio():
             logger.error(f"❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio to Telegram"}), 500
 
-        # ⚠️ Cleanup временно отключен для отладки
-        # os.remove(voice_filename)
-        # os.remove(final_output)
+        # --- Очистка ---
+        cleanup(voice_filename)
+        cleanup(output_filename)
 
         return jsonify({
             "status": "sent_to_telegram",
             "client_id": client_id,
             "name": name,
             "processed_at": time.time(),
-            "telegram_result": tg_json.get("result", {})
+            "telegram_file_id": tg_json["result"]["audio"]["file_id"]
         })
 
     except Exception as e:
