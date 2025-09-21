@@ -44,7 +44,7 @@ def health_check():
 
 @app.route("/upload_voice", methods=["POST"])
 def upload_voice():
-    """Принимаем голосовое и начинаем обработку (но не ждём завершения)"""
+    """Принимаем голосовое, создаём job_id и запускаем фоновую обработку"""
     try:
         data = request.get_json(force=True)
         voice_url = data.get("voice_url")
@@ -54,49 +54,68 @@ def upload_voice():
         if not voice_url or not client_id:
             return jsonify({"error": "voice_url and client_id required"}), 400
 
-        logger.info(f"📥 Upload voice for client {client_id} from {voice_url}")
+        # Генерируем job_id
+        job_id = str(uuid.uuid4())
 
-        # Помечаем статус клиента
-        MIX_STORAGE[client_id] = {"status": "processing", "file": None, "url": None}
+        logger.info(f"📥 Upload voice for client {client_id} (job_id={job_id}) from {voice_url}")
 
-        # Скачиваем голос
-        resp = requests.get(voice_url, timeout=300)
-        resp.raise_for_status()
-
-        voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
-        with open(voice_filename, "wb") as f:
-            f.write(resp.content)
-
-        # Миксуем
-        output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
-        output_path = os.path.join(os.getcwd(), output_filename)
-        mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
-
-        # Генерируем URL
-        download_url = f"{request.host_url}download/{output_filename}"
-
-        # Сохраняем в хранилище
-        MIX_STORAGE[client_id] = {
-            "status": "ready",
-            "file": output_path,
-            "url": download_url
+        # Помечаем статус
+        MIX_STORAGE[job_id] = {
+            "status": "processing",
+            "file": None,
+            "url": None,
+            "client_id": client_id,
+            "name": name
         }
 
-        cleanup(voice_filename)
+        def process_task():
+            try:
+                # Скачиваем голос
+                resp = requests.get(voice_url, timeout=60)
+                resp.raise_for_status()
 
-        logger.info(f"✅ Mix ready for {client_id}: {download_url}")
+                voice_filename = f"voice_{job_id}.ogg"
+                with open(voice_filename, "wb") as f:
+                    f.write(resp.content)
 
+                # Миксуем
+                output_filename = f"mixed_{job_id}.mp3"
+                output_path = os.path.join(os.getcwd(), output_filename)
+                mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
+
+                # Генерируем URL
+                download_url = f"{request.host_url}download/{output_filename}"
+
+                # Обновляем статус
+                MIX_STORAGE[job_id].update({
+                    "status": "ready",
+                    "file": output_path,
+                    "url": download_url
+                })
+
+                cleanup(voice_filename)
+                logger.info(f"✅ Mix ready for client {client_id} (job_id={job_id}): {download_url}")
+
+            except Exception as e:
+                MIX_STORAGE[job_id]["status"] = "error"
+                MIX_STORAGE[job_id]["error"] = str(e)
+                logger.error(f"❌ Error processing job {job_id}: {e}")
+
+        # Запускаем в фоне
+        threading.Thread(target=process_task, daemon=True).start()
+
+        # ⚡️ Отвечаем быстро
         return jsonify({
             "status": "processing",
-            "message": "🎤 Голосовое принято, микс обрабатывается",
+            "job_id": job_id,
             "client_id": client_id,
+            "name": name,
             "requested_at": time.time()
         })
 
     except Exception as e:
         logger.error(f"❌ Error in /upload_voice: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/get_mix", methods=["POST"])
 def get_mix():
