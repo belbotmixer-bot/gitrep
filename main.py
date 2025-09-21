@@ -65,7 +65,7 @@ def process_audio():
 
         # --- Скачиваем голосовое ---
         voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
-        resp = requests.get(voice_url, timeout=60)
+        resp = requests.get(voice_url, timeout=300)
         resp.raise_for_status()
         with open(voice_filename, "wb") as f:
             f.write(resp.content)
@@ -84,7 +84,7 @@ def process_audio():
                 "chat_id": client_id,
                 "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
             }
-            tg_resp = requests.post(send_url, data=payload, files=files, timeout=120)
+            tg_resp = requests.post(send_url, data=payload, files=files, timeout=300)
 
         try:
             tg_json = tg_resp.json()
