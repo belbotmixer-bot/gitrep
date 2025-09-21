@@ -78,16 +78,15 @@ def process_audio():
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"🎵 Mixed audio created: {output_filename}")
 
-        # --- Отправляем в Telegram ---
-        send_url = f"{TELEGRAM_API_URL}/sendAudio"
-        with open(output_filename, "rb") as audio_file:
-            files = {"audio": audio_file}
-            payload = {
-                "chat_id": client_id,
-                "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!",
-                "title": f"Mix_{uuid.uuid4().hex}"  # 👈 ломаем кэш Telegram
-            }
-            tg_resp = requests.post(send_url, data=payload, files=files, timeout=120)
+        # 3. Отправляем файл в Telegram (обход кеша через sendDocument)
+send_url = f"{TELEGRAM_API_URL}/sendDocument"
+with open(output_filename, "rb") as audio_file:
+    files = {"document": (f"{uuid.uuid4().hex}.mp3", audio_file, "audio/mpeg")}
+    payload = {
+        "chat_id": client_id,
+        "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
+    }
+    tg_resp = requests.post(send_url, data=payload, files=files, timeout=120)
 
         try:
             tg_json = tg_resp.json()
