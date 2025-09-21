@@ -6,7 +6,7 @@ import requests
 import logging
 from audio_processor import mix_voice_with_music
 
-# Настройка логирования
+# --- Логирование ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -14,13 +14,13 @@ app = Flask(__name__)
 
 # --- Конфигурация ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY", "YOUR_SALEBOT_API_KEY_HERE")
+SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY", "YOUR_SALEBOT_KEY")
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
 def cleanup(filename):
-    """Удаление временных файлов после обработки"""
+    """Удаление временных файлов"""
     try:
         if filename and os.path.exists(filename):
             os.remove(filename)
@@ -31,7 +31,6 @@ def cleanup(filename):
 
 @app.route("/health")
 def health_check():
-    """Эндпоинт для проверки работоспособности"""
     return jsonify({
         "status": "healthy",
         "service": "voice-mixer-api",
@@ -42,11 +41,10 @@ def health_check():
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram → шлём ссылку в Salebot"""
     logger.info("🎯 /process_audio called")
 
     try:
-        # --- Получаем данные из вебхука ---
+        # --- Получаем данные ---
         if request.is_json:
             data = request.get_json()
         else:
@@ -72,12 +70,12 @@ def process_audio():
             f.write(resp.content)
         logger.info(f"📥 Voice saved as {voice_filename} ({os.path.getsize(voice_filename)} bytes)")
 
-        # --- Миксуем с музыкой ---
+        # --- Миксуем ---
         output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"🎵 Mixed audio created: {output_filename} ({os.path.getsize(output_filename)} bytes)")
 
-        # --- Отправляем файл в Telegram ---
+        # --- Отправляем в Telegram ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": (f"{uuid.uuid4().hex}.mp3", audio_file, "audio/mpeg")}
@@ -87,6 +85,7 @@ def process_audio():
             }
             tg_resp = requests.post(send_url, data=payload, files=files, timeout=300)
 
+        tg_json = {}
         try:
             tg_json = tg_resp.json()
         except Exception:
@@ -98,32 +97,36 @@ def process_audio():
             logger.error(f"❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio to Telegram"}), 500
 
-        # --- Получаем CDN URL из Telegram ---
+        # --- Достаём file_id для получения ссылки ---
         file_id = tg_json["result"]["audio"]["file_id"]
-        get_file_url = f"{TELEGRAM_API_URL}/getFile"
-        file_info = requests.get(get_file_url, params={"file_id": file_id}, timeout=60).json()
-
-        if not file_info.get("ok"):
-            logger.error(f"❌ getFile failed: {file_info}")
-            return jsonify({"error": "Failed to get file info"}), 500
-
+        file_info_url = f"{TELEGRAM_API_URL}/getFile?file_id={file_id}"
+        file_info = requests.get(file_info_url).json()
         file_path = file_info["result"]["file_path"]
         cdn_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+
         logger.info(f"🌍 CDN URL: {cdn_url}")
 
-        # --- Отправляем ссылку в Salebot ---
-        salebot_url = "https://salebot.pro/api/"
-        headers = {"Content-Type": "application/json"}
-        payload = {
+        # --- Salebot: сохраняем переменную ---
+        sb_set_vars_url = "https://salebot.pro/api/set_variables"
+        vars_payload = {
             "token": SALEBOT_API_KEY,
             "client_id": str(client_id),
             "variables": {
                 "last_mix_url": cdn_url
-            },
+            }
+        }
+        sb_vars_resp = requests.post(sb_set_vars_url, json=vars_payload, timeout=30)
+        logger.info(f"📨 Salebot set_variables response: {sb_vars_resp.status_code}, {sb_vars_resp.text}")
+
+        # --- Salebot: шлём сообщение ---
+        sb_send_msg_url = "https://salebot.pro/api/send_message"
+        msg_payload = {
+            "token": SALEBOT_API_KEY,
+            "client_id": str(client_id),
             "message": f"🔗 Ссылка на ваш микс: {cdn_url}"
         }
-        sb_resp = requests.post(salebot_url, json=payload, headers=headers, timeout=60)
-        logger.info(f"📨 Salebot callback response: {sb_resp.status_code}, {sb_resp.text}")
+        sb_msg_resp = requests.post(sb_send_msg_url, json=msg_payload, timeout=30)
+        logger.info(f"📨 Salebot send_message response: {sb_msg_resp.status_code}, {sb_msg_resp.text}")
 
         # --- Очистка ---
         cleanup(voice_filename)
