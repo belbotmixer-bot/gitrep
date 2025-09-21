@@ -39,7 +39,7 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "2.1"
+        "version": "2.2"
     })
 
 
@@ -70,8 +70,10 @@ def upload_voice():
 
         # Фоновая задача
         def process_task():
+            start_time = time.time()
             try:
-                resp = requests.get(voice_url, timeout=60)
+                # увеличенные таймауты: 10 сек соединение, 120 сек скачка
+                resp = requests.get(voice_url, timeout=(10, 120))
                 resp.raise_for_status()
 
                 voice_filename = f"voice_{job_id}.ogg"
@@ -92,7 +94,10 @@ def upload_voice():
                 })
 
                 cleanup(voice_filename)
+
+                elapsed = time.time() - start_time
                 logger.info(f"✅ Mix ready (job_id={job_id}): {download_url}")
+                logger.info(f"⏱️ Job {job_id} обработан за {elapsed:.2f} сек")
 
             except Exception as e:
                 MIX_STORAGE[job_id]["status"] = "error"
