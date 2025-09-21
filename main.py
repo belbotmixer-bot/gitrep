@@ -16,13 +16,12 @@ app = Flask(__name__)
 # --- Конфигурация ---
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 
-# Хранилище миксов (вместо базы данных)
-MIX_STORAGE = {}  # client_id -> {"status": "processing|ready|error", "file": path, "url": url}
+# Хранилище задач
+MIX_STORAGE = {}  # job_id -> {...}
 
 # ==================== УТИЛИТЫ ====================
 
 def cleanup(filename):
-    """Удаление временных файлов после обработки"""
     try:
         if os.path.exists(filename):
             os.remove(filename)
@@ -60,18 +59,18 @@ def upload_voice():
 
         logger.info(f"📥 Upload voice for client {client_id} (job_id={job_id}) from {voice_url}")
 
-        # Помечаем статус
+        # Сохраняем статус
         MIX_STORAGE[job_id] = {
             "status": "processing",
             "file": None,
             "url": None,
             "client_id": client_id,
-            "name": name
+            "name": name,
+            "requested_at": time.time()
         }
 
         def process_task():
             try:
-                # Скачиваем голос
                 resp = requests.get(voice_url, timeout=60)
                 resp.raise_for_status()
 
@@ -87,25 +86,24 @@ def upload_voice():
                 # Генерируем URL
                 download_url = f"{request.host_url}download/{output_filename}"
 
-                # Обновляем статус
+                # Обновляем
                 MIX_STORAGE[job_id].update({
                     "status": "ready",
                     "file": output_path,
-                    "url": download_url
+                    "url": download_url,
+                    "finished_at": time.time()
                 })
 
                 cleanup(voice_filename)
-                logger.info(f"✅ Mix ready for client {client_id} (job_id={job_id}): {download_url}")
+                logger.info(f"✅ Mix ready (job_id={job_id}): {download_url}")
 
             except Exception as e:
                 MIX_STORAGE[job_id]["status"] = "error"
                 MIX_STORAGE[job_id]["error"] = str(e)
                 logger.error(f"❌ Error processing job {job_id}: {e}")
 
-        # Запускаем в фоне
         threading.Thread(target=process_task, daemon=True).start()
 
-        # ⚡️ Отвечаем быстро
         return jsonify({
             "status": "processing",
             "job_id": job_id,
@@ -118,40 +116,40 @@ def upload_voice():
         logger.error(f"❌ Error in /upload_voice: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/get_mix", methods=["POST"])
-def get_mix():
-    """Отдаём готовый микс по client_id"""
-    try:
-        data = request.get_json(force=True)
-        client_id = data.get("client_id")
 
-        if not client_id:
-            return jsonify({"error": "client_id required"}), 400
+@app.route("/get_mix/<job_id>", methods=["GET", "POST"])
+def get_mix(job_id):
+    """Отдаём готовый микс по job_id"""
+    job = MIX_STORAGE.get(job_id)
 
-        entry = MIX_STORAGE.get(client_id)
+    if not job:
+        return jsonify({"status": "not_found", "message": f"Job {job_id} не найден"}), 404
 
-        if not entry:
-            return jsonify({"status": "not_found", "message": "Нет данных для этого клиента"}), 404
+    if job["status"] == "processing":
+        return jsonify({
+            "status": "processing",
+            "message": "⌛ Микс ещё готовится",
+            "job_id": job_id,
+            "client_id": job["client_id"]
+        })
 
-        if entry["status"] == "processing":
-            return jsonify({
-                "status": "processing",
-                "message": "⌛ Микс ещё готовится"
-            }), 200
+    if job["status"] == "ready":
+        return jsonify({
+            "status": "ready",
+            "message": "🎵 Микс готов",
+            "job_id": job_id,
+            "client_id": job["client_id"],
+            "download_url": job["url"]
+        })
 
-        if entry["status"] == "ready":
-            return jsonify({
-                "status": "success",
-                "message": "🎵 Микс готов",
-                "download_url": entry["url"],
-                "client_id": client_id
-            }), 200
+    if job["status"] == "error":
+        return jsonify({
+            "status": "error",
+            "message": f"❌ Ошибка при обработке: {job.get('error')}",
+            "job_id": job_id
+        }), 500
 
-        return jsonify({"status": "error", "message": "Ошибка обработки"}), 500
-
-    except Exception as e:
-        logger.error(f"❌ Error in /get_mix: {e}")
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"status": "unknown", "job_id": job_id}), 500
 
 
 @app.route("/download/<filename>", methods=["GET"])
@@ -174,7 +172,7 @@ def download_file(filename):
         return jsonify({"error": str(e)}), 500
 
 
-# ==================== ЗАПУСК СЕРВЕРА ====================
+# ==================== ЗАПУСК ====================
 if __name__ == "__main__":
     logger.info("🌐 Starting Flask server (two-webhook mode)...")
     app.run(host="0.0.0.0", port=5000, debug=False)
