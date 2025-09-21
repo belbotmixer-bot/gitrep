@@ -7,7 +7,7 @@ import logging
 from audio_processor import mix_voice_with_music
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -18,14 +18,14 @@ GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/mai
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
-def cleanup(filename):
+def cleanup(filename, task_id=None):
     """Удаление временных файлов после обработки"""
     try:
         if filename and os.path.exists(filename):
             os.remove(filename)
-            logger.info(f"🗑️ Deleted: {filename}")
+            logger.info(f"[task_id={task_id}] 🗑️ Deleted: {filename}")
     except Exception as e:
-        logger.error(f"⚠️ Cleanup error for {filename}: {e}")
+        logger.error(f"[task_id={task_id}] ⚠️ Cleanup error for {filename}: {e}")
 
 
 @app.route("/health")
@@ -35,14 +35,15 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "3.0"
+        "version": "3.1"
     })
 
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
     """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram"""
-    logger.info("🎯 /process_audio called")
+    task_id = uuid.uuid4().hex[:8]  # короткий ID для отслеживания
+    logger.info(f"[task_id={task_id}] 🎯 /process_audio called")
 
     try:
         # --- Получаем данные из вебхука ---
@@ -52,34 +53,34 @@ def process_audio():
             data = request.get_json(force=True, silent=True) or request.form.to_dict()
 
         if not data:
-            return jsonify({"error": "No data received"}), 400
+            return jsonify({"error": "No data received", "task_id": task_id}), 400
 
         voice_url = data.get("voice_url")
         client_id = data.get("client_id")  # chat_id в Telegram
         name = data.get("name", "")
 
-        logger.info(f"🔍 voice_url={voice_url}, client_id={client_id}, name={name}")
+        logger.info(f"[task_id={task_id}] 🔍 voice_url={voice_url}, client_id={client_id}, name={name}")
 
         if not voice_url or not client_id:
-            return jsonify({"error": "voice_url and client_id required"}), 400
+            return jsonify({"error": "voice_url and client_id required", "task_id": task_id}), 400
 
         # --- Скачиваем голосовое ---
-        voice_filename = f"voice_{uuid.uuid4().hex}.ogg"
+        voice_filename = f"voice_{task_id}.ogg"
         resp = requests.get(voice_url, timeout=300)
         resp.raise_for_status()
         with open(voice_filename, "wb") as f:
             f.write(resp.content)
-        logger.info(f"📥 Voice saved as {voice_filename} ({os.path.getsize(voice_filename)} bytes)")
+        logger.info(f"[task_id={task_id}] 📥 Voice saved as {voice_filename} ({os.path.getsize(voice_filename)} bytes)")
 
         # --- Миксуем с музыкой ---
-        output_filename = f"mixed_{uuid.uuid4().hex}.mp3"
+        output_filename = f"mixed_{task_id}.mp3"
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
-        logger.info(f"🎵 Mixed audio created: {output_filename} ({os.path.getsize(output_filename)} bytes)")
+        logger.info(f"[task_id={task_id}] 🎵 Mixed audio created: {output_filename} ({os.path.getsize(output_filename)} bytes)")
 
         # --- Отправляем файл в Telegram ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
-            files = {"audio": (f"{uuid.uuid4().hex}.mp3", audio_file, "audio/mpeg")}
+            files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
             payload = {
                 "chat_id": client_id,
                 "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
@@ -91,18 +92,19 @@ def process_audio():
         except Exception:
             tg_json = {"raw_text": tg_resp.text}
 
-        logger.info(f"📦 Telegram response: {tg_json}")
+        logger.info(f"[task_id={task_id}] 📦 Telegram response: {tg_json}")
 
         if tg_resp.status_code != 200 or not tg_json.get("ok"):
-            logger.error(f"❌ Telegram API error: {tg_json}")
-            return jsonify({"error": "Failed to send audio to Telegram"}), 500
+            logger.error(f"[task_id={task_id}] ❌ Telegram API error: {tg_json}")
+            return jsonify({"error": "Failed to send audio to Telegram", "task_id": task_id}), 500
 
         # --- Очистка ---
-        cleanup(voice_filename)
-        cleanup(output_filename)
+        cleanup(voice_filename, task_id)
+        cleanup(output_filename, task_id)
 
         return jsonify({
             "status": "sent_to_telegram",
+            "task_id": task_id,
             "client_id": client_id,
             "name": name,
             "processed_at": time.time(),
@@ -110,10 +112,10 @@ def process_audio():
         })
 
     except Exception as e:
-        logger.error(f"❌ Error in /process_audio: {e}")
+        logger.error(f"[task_id={task_id}] ❌ Error in /process_audio: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "task_id": task_id}), 500
 
 
 if __name__ == "__main__":
