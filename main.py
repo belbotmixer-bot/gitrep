@@ -36,13 +36,13 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "3.1"
+        "version": "4.0"
     })
 
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram + Salebot"""
+    """Основной эндпоинт: скачиваем голосовое → миксуем → отправляем в Telegram → шлём ссылку в Salebot"""
     logger.info("🎯 /process_audio called")
 
     try:
@@ -56,7 +56,7 @@ def process_audio():
             return jsonify({"error": "No data received"}), 400
 
         voice_url = data.get("voice_url")
-        client_id = data.get("client_id")  # chat_id в Telegram и в Salebot
+        client_id = data.get("client_id")  # chat_id в Telegram
         name = data.get("name", "")
 
         logger.info(f"🔍 voice_url={voice_url}, client_id={client_id}, name={name}")
@@ -98,25 +98,32 @@ def process_audio():
             logger.error(f"❌ Telegram API error: {tg_json}")
             return jsonify({"error": "Failed to send audio to Telegram"}), 500
 
-        # --- Получаем file_id и cdn_url ---
+        # --- Получаем CDN URL из Telegram ---
         file_id = tg_json["result"]["audio"]["file_id"]
-        get_file_url = f"{TELEGRAM_API_URL}/getFile?file_id={file_id}"
-        file_info = requests.get(get_file_url).json()
+        get_file_url = f"{TELEGRAM_API_URL}/getFile"
+        file_info = requests.get(get_file_url, params={"file_id": file_id}, timeout=60).json()
+
+        if not file_info.get("ok"):
+            logger.error(f"❌ getFile failed: {file_info}")
+            return jsonify({"error": "Failed to get file info"}), 500
+
         file_path = file_info["result"]["file_path"]
         cdn_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
         logger.info(f"🌍 CDN URL: {cdn_url}")
 
         # --- Отправляем ссылку в Salebot ---
-        salebot_url = f"https://chatter.salebot.pro/api/{SALEBOT_API_KEY}/callback"
-        salebot_payload = {
-            "client_id": client_id,
-            "message": f"Ссылка на ваш микс: {cdn_url}"
+        salebot_url = "https://salebot.pro/api/"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "token": SALEBOT_API_KEY,
+            "client_id": str(client_id),
+            "variables": {
+                "last_mix_url": cdn_url
+            },
+            "message": f"🔗 Ссылка на ваш микс: {cdn_url}"
         }
-        try:
-            sb_resp = requests.post(salebot_url, json=salebot_payload, timeout=30)
-            logger.info(f"📨 Salebot callback response: {sb_resp.status_code}, {sb_resp.text}")
-        except Exception as e:
-            logger.error(f"❌ Error sending callback to Salebot: {e}")
+        sb_resp = requests.post(salebot_url, json=payload, headers=headers, timeout=60)
+        logger.info(f"📨 Salebot callback response: {sb_resp.status_code}, {sb_resp.text}")
 
         # --- Очистка ---
         cleanup(voice_filename)
