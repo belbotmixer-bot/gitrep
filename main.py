@@ -5,10 +5,9 @@ import time
 import requests
 import logging
 import threading
-import json
 from audio_processor import mix_voice_with_music
 
-# ==================== ЛОГИ ====================
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -16,33 +15,12 @@ app = Flask(__name__)
 
 # --- Конфигурация ---
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
-STORAGE_FILE = "storage.json"
+PUBLIC_HOST = "https://gitrep-9iwv.onrender.com"  # 💡 Всегда фиксируем базовый URL без порта
 
 # Хранилище задач
 MIX_STORAGE = {}  # job_id -> {...}
 
-
 # ==================== УТИЛИТЫ ====================
-def save_storage():
-    """Сохраняем MIX_STORAGE в storage.json"""
-    try:
-        with open(STORAGE_FILE, "w", encoding="utf-8") as f:
-            json.dump(MIX_STORAGE, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.error(f"⚠️ Save storage error: {e}")
-
-
-def load_storage():
-    """Загружаем MIX_STORAGE из storage.json"""
-    global MIX_STORAGE
-    if os.path.exists(STORAGE_FILE):
-        try:
-            with open(STORAGE_FILE, "r", encoding="utf-8") as f:
-                MIX_STORAGE = json.load(f)
-                logger.info(f"📂 Storage loaded ({len(MIX_STORAGE)} jobs)")
-        except Exception as e:
-            logger.error(f"⚠️ Load storage error: {e}")
-
 
 def cleanup(filename):
     try:
@@ -78,7 +56,6 @@ def upload_voice():
             return jsonify({"error": "voice_url and client_id required"}), 400
 
         job_id = str(uuid.uuid4())
-        host_url = request.host_url  # 💡 сохраняем контекст заранее
 
         logger.info(f"📥 Upload voice for client {client_id} (job_id={job_id}) from {voice_url}")
 
@@ -90,7 +67,6 @@ def upload_voice():
             "client_id": client_id,
             "name": name
         }
-        save_storage()
 
         # Фоновая задача
         def process_task():
@@ -106,15 +82,14 @@ def upload_voice():
                 output_path = os.path.join(os.getcwd(), output_filename)
                 mix_voice_with_music(voice_filename, output_path, GITHUB_MUSIC_URL)
 
-                # ⚡ используем сохранённый host_url
-                download_url = f"{host_url}download/{output_filename}"
+                # ⚡ генерируем через PUBLIC_HOST
+                download_url = f"{PUBLIC_HOST}/download/{output_filename}"
 
                 MIX_STORAGE[job_id].update({
                     "status": "ready",
                     "file": output_path,
                     "url": download_url
                 })
-                save_storage()
 
                 cleanup(voice_filename)
                 logger.info(f"✅ Mix ready (job_id={job_id}): {download_url}")
@@ -122,7 +97,6 @@ def upload_voice():
             except Exception as e:
                 MIX_STORAGE[job_id]["status"] = "error"
                 MIX_STORAGE[job_id]["error"] = str(e)
-                save_storage()
                 logger.error(f"❌ Error processing job {job_id}: {e}")
 
         threading.Thread(target=process_task, daemon=True).start()
@@ -197,6 +171,6 @@ def download_file(filename):
 
 # ==================== ЗАПУСК ====================
 if __name__ == "__main__":
-    load_storage()
-    logger.info("🌐 Starting Flask server (two-webhook mode)...")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    port = int(os.environ.get("PORT", 5000))  # ⚡ Render подставляет свой порт
+    logger.info(f"🌐 Starting Flask server (two-webhook mode) on port {port}...")
+    app.run(host="0.0.0.0", port=port, debug=False)
