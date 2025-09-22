@@ -122,10 +122,9 @@ def process_audio():
         cleanup(output_filename, task_id)
 
         return jsonify({
-            "status": "sent_to_telegram",
             "task_id": task_id,
-            "file_id": file_id,
-            "direct_url": direct_url
+    "file_id": file_id,
+    "direct_url": direct_url
         })
 
     except Exception as e:
