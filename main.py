@@ -126,21 +126,22 @@ def process_audio():
         }
 
         # --- Отправляем callback в Salebot с прямым URL ---
-        send_salebot_callback(client_id, direct_url)
-
-        cleanup(voice_filename, task_id)
-        cleanup(output_filename, task_id)
-
-        response = {
-            "task_id": task_id,
-            "file_id": file_id,
-            "direct_url": direct_url
+        def send_salebot_callback(client_id, direct_url):
+    try:
+        payload = {
+            "client_id": client_id,
+            "callback_message": direct_url
         }
-        logger.info(f"[task_id={task_id}] ✅ Response to Salebot: {response}")
-        return jsonify(response)
-
+        resp = requests.post(
+            SALEBOT_CALLBACK_URL,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        resp.raise_for_status()
+        logger.info(f"[client_id={client_id}] ✅ Salebot callback sent successfully: {resp.text}")
     except Exception as e:
-        logger.error(f"[task_id={task_id}] ❌ Error in /process_audio: {e}")
+        logger.error(f"[client_id={client_id}] ❌ Failed to send Salebot callback: {e}")
         return jsonify({"error": str(e), "task_id": task_id}), 500
 
 @app.route("/webhook", methods=["POST"])
