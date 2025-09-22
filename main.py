@@ -4,6 +4,7 @@ import uuid
 import time
 import requests
 import logging
+import json
 from audio_processor import mix_voice_with_music
 
 # --- Логирование ---
@@ -51,7 +52,12 @@ def send_salebot_callback(client_id, direct_url):
             "my_client": client_id,
             "my_message": direct_url
         }
-        resp = requests.post(callback_url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
+        resp = requests.post(
+            callback_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
         resp.raise_for_status()
         logger.info(f"[client_id={client_id}] ✅ Salebot callback sent successfully: {resp.text}")
     except Exception as e:
@@ -59,15 +65,13 @@ def send_salebot_callback(client_id, direct_url):
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
+    """Первый вебхук: Salebot → Render"""
     task_id = uuid.uuid4().hex[:8]
     logger.info(f"[task_id={task_id}] 🎯 /process_audio called")
 
     try:
         data = request.get_json(force=True, silent=True) or request.form.to_dict()
         logger.info(f"[task_id={task_id}] 🔍 Incoming data: {data}")
-
-        if not data:
-            return jsonify({"error": "No data received", "task_id": task_id}), 400
 
         voice_url = data.get("voice_url")
         client_id = data.get("client_id")
@@ -76,6 +80,7 @@ def process_audio():
         if not voice_url or not client_id:
             return jsonify({"error": "voice_url and client_id required", "task_id": task_id}), 400
 
+        # --- Скачиваем голос ---
         voice_filename = f"voice_{task_id}.ogg"
         resp = requests.get(voice_url, timeout=300)
         resp.raise_for_status()
@@ -83,46 +88,46 @@ def process_audio():
             f.write(resp.content)
         logger.info(f"[task_id={task_id}] 📥 Voice saved as {voice_filename}")
 
+        # --- Миксуем ---
         output_filename = f"mixed_{task_id}.mp3"
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"[task_id={task_id}] 🎵 Mixed audio created: {output_filename}")
 
-        # --- Отправляем аудио с кнопкой ---
-        direct_url = None
+        # --- Отправляем в Telegram с кнопкой ---
+        send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
+
+            # Сначала получаем direct_url
             payload = {
                 "chat_id": client_id,
-                "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!",
-                "reply_markup": {
-                    "inline_keyboard": [[
-                        {"text": "Сохранить микс", "url": f"https://chatter.salebot.pro/api/{SALEBOT_API_KEY}/callback?value_client_id={client_id}&value_message=MIX_URL_PLACEHOLDER"}
-                    ]]
-                }
+                "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
             }
-            tg_resp = requests.post(f"{TELEGRAM_API_URL}/sendAudio", data=payload, files=files, timeout=300)
+            tg_resp = requests.post(send_url, data=payload, files=files, timeout=300)
+            tg_json = tg_resp.json()
+            logger.info(f"[task_id={task_id}] 📨 Telegram resp: {tg_json}")
 
-        tg_json = tg_resp.json()
-        logger.info(f"[task_id={task_id}] 📨 Telegram resp: {tg_json}")
+            if tg_resp.status_code != 200 or not tg_json.get("ok"):
+                return jsonify({"error": "Failed to send audio to Telegram", "task_id": task_id}), 500
 
-        if tg_resp.status_code != 200 or not tg_json.get("ok"):
-            return jsonify({"error": "Failed to send audio", "task_id": task_id}), 500
+            file_id = tg_json["result"]["audio"]["file_id"]
+            direct_url = get_direct_url(file_id)
 
-        file_id = tg_json["result"]["audio"]["file_id"]
-        direct_url = get_direct_url(file_id)
-
-        # --- Обновляем кнопку ссылкой на реальный direct_url ---
-        payload = {
-            "chat_id": client_id,
-            "message_id": tg_json["result"]["message_id"],
-            "reply_markup": {
+            # --- Добавляем inline-кнопку с callback ---
+            reply_markup = {
                 "inline_keyboard": [[
                     {"text": "Сохранить микс", "url": f"{SALEBOT_CALLBACK_URL}?value_client_id={client_id}&value_message={direct_url}"}
                 ]]
             }
-        }
-        requests.post(f"{TELEGRAM_API_URL}/editMessageReplyMarkup", json=payload, timeout=30)
 
+            payload_update = {
+                "chat_id": client_id,
+                "reply_markup": json.dumps(reply_markup)
+            }
+            update_resp = requests.post(f"{TELEGRAM_API_URL}/editMessageReplyMarkup", data=payload_update, timeout=300)
+            logger.info(f"[task_id={task_id}] 🔘 Button sent: {update_resp.json()}")
+
+        # --- Сохраняем результат ---
         RESULTS[task_id] = {
             "status": "done",
             "file_id": file_id,
@@ -132,13 +137,38 @@ def process_audio():
             "created_at": time.time(),
         }
 
+        # --- Отправляем callback в Salebot сразу ---
+        send_salebot_callback(client_id, direct_url)
+
         cleanup(voice_filename, task_id)
         cleanup(output_filename, task_id)
 
-        return jsonify({"task_id": task_id, "file_id": file_id, "direct_url": direct_url})
+        return jsonify({
+            "task_id": task_id,
+            "file_id": file_id,
+            "direct_url": direct_url
+        })
 
     except Exception as e:
-        logger.error(f"[task_id={task_id}] ❌ Error: {e}")
+        logger.error(f"[task_id={task_id}] ❌ Error in /process_audio: {e}")
         return jsonify({"error": str(e), "task_id": task_id}), 500
 
-# --- Остальные маршруты get_result, list_results, health_check остаются без изменений ---
+# --- Остальные маршруты ---
+@app.route("/get_result/<task_id>", methods=["GET"])
+def get_result(task_id):
+    result = RESULTS.get(task_id)
+    if not result:
+        return jsonify({"error": "Task not found", "task_id": task_id}), 404
+    if time.time() - result.get("created_at", 0) > RESULT_TTL:
+        return jsonify({"error": "Result expired", "task_id": task_id}), 410
+    return jsonify(result)
+
+@app.route("/list_results", methods=["GET"])
+def list_results():
+    now = time.time()
+    active_results = {tid: {"status": r.get("status", "unknown")} for tid, r in RESULTS.items() if now - r.get("created_at", now) <= RESULT_TTL}
+    return jsonify(active_results)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
