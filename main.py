@@ -6,7 +6,7 @@ import requests
 import logging
 from audio_processor import mix_voice_with_music
 
-# Настройка логирования
+# --- Логирование ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -18,13 +18,12 @@ GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/mai
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 TELEGRAM_FILE_API_URL = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}"
 
-# Хранилище результатов
+# --- Хранилище результатов ---
 RESULTS = {}
 RESULT_TTL = 3600  # хранение 1 час
 
 
 def cleanup(filename, task_id=None):
-    """Удаление временных файлов после обработки"""
     try:
         if filename and os.path.exists(filename):
             os.remove(filename)
@@ -34,7 +33,6 @@ def cleanup(filename, task_id=None):
 
 
 def get_direct_url(file_id):
-    """Получаем прямую ссылку на файл в Telegram"""
     try:
         resp = requests.get(f"{TELEGRAM_API_URL}/getFile", params={"file_id": file_id}, timeout=30)
         resp.raise_for_status()
@@ -51,18 +49,21 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "3.2"
+        "version": "3.3-logging"
     })
 
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    """Salebot → Render → Telegram → Render (file_id, direct_url)"""
+    """Первый вебхук: Salebot → Render"""
     task_id = uuid.uuid4().hex[:8]
     logger.info(f"[task_id={task_id}] 🎯 /process_audio called")
+    logger.info(f"[task_id={task_id}] 🔍 Headers: {dict(request.headers)}")
 
     try:
         data = request.get_json(force=True, silent=True) or request.form.to_dict()
+        logger.info(f"[task_id={task_id}] 🔍 Incoming data: {data}")
+
         if not data:
             return jsonify({"error": "No data received", "task_id": task_id}), 400
 
@@ -70,12 +71,10 @@ def process_audio():
         client_id = data.get("client_id")
         name = data.get("name", "")
 
-        logger.info(f"[task_id={task_id}] 🔍 voice_url={voice_url}, client_id={client_id}, name={name}")
-
         if not voice_url or not client_id:
             return jsonify({"error": "voice_url and client_id required", "task_id": task_id}), 400
 
-        # --- Скачиваем голосовое ---
+        # --- Скачиваем голос ---
         voice_filename = f"voice_{task_id}.ogg"
         resp = requests.get(voice_url, timeout=300)
         resp.raise_for_status()
@@ -83,12 +82,12 @@ def process_audio():
             f.write(resp.content)
         logger.info(f"[task_id={task_id}] 📥 Voice saved as {voice_filename}")
 
-        # --- Миксуем с музыкой ---
+        # --- Миксуем ---
         output_filename = f"mixed_{task_id}.mp3"
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"[task_id={task_id}] 🎵 Mixed audio created: {output_filename}")
 
-        # --- Отправляем файл в Telegram ---
+        # --- Отправляем в Telegram ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
@@ -117,15 +116,16 @@ def process_audio():
             "created_at": time.time(),
         }
 
-        # --- Очистка ---
         cleanup(voice_filename, task_id)
         cleanup(output_filename, task_id)
 
-        return jsonify({
+        response = {
             "task_id": task_id,
-    "file_id": file_id,
-    "direct_url": direct_url
-        })
+            "file_id": file_id,
+            "direct_url": direct_url
+        }
+        logger.info(f"[task_id={task_id}] ✅ Response to Salebot: {response}")
+        return jsonify(response)
 
     except Exception as e:
         logger.error(f"[task_id={task_id}] ❌ Error in /process_audio: {e}")
@@ -134,13 +134,21 @@ def process_audio():
 
 @app.route("/get_result/<task_id>", methods=["GET"])
 def get_result(task_id):
+    """Второй вебхук: Salebot → Render (проверка результата)"""
+    logger.info(f"[task_id={task_id}] 🌍 /get_result called from {request.remote_addr}")
+    logger.info(f"[task_id={task_id}] 🔍 Headers: {dict(request.headers)}")
+    logger.info(f"[task_id={task_id}] 🔍 Query args: {request.args}")
+
     result = RESULTS.get(task_id)
     if not result:
+        logger.warning(f"[task_id={task_id}] ❌ Result not found")
         return jsonify({"error": "Task not found", "task_id": task_id}), 404
 
     if time.time() - result.get("created_at", 0) > RESULT_TTL:
+        logger.warning(f"[task_id={task_id}] ⏰ Result expired")
         return jsonify({"error": "Result expired", "task_id": task_id}), 410
 
+    logger.info(f"[task_id={task_id}] ✅ Returning result: {result}")
     return jsonify(result)
 
 
@@ -152,6 +160,7 @@ def list_results():
         for task_id, result in RESULTS.items()
         if now - result.get("created_at", now) <= RESULT_TTL
     }
+    logger.info(f"📋 Active results: {active_results}")
     return jsonify(active_results)
 
 
