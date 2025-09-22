@@ -46,12 +46,14 @@ def get_direct_url(file_id):
 
 def send_salebot_callback(client_id, direct_url):
     try:
+        # Добавляем параметры value_client_id и value_message в URL
+        callback_url = f"{SALEBOT_CALLBACK_URL}?value_client_id=my_client&value_message=my_message"
         payload = {
             "my_client": client_id,
             "my_message": direct_url
         }
         resp = requests.post(
-            SALEBOT_CALLBACK_URL,
+            callback_url,
             json=payload,
             headers={"Content-Type": "application/json"},
             timeout=30
