@@ -19,7 +19,6 @@ GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/mai
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 TELEGRAM_FILE_API_URL = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}"
 
-# --- Salebot callback ---
 SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY", "YOUR_SALEBOT_API_KEY_HERE")
 SALEBOT_CALLBACK_URL = f"https://chatter.salebot.pro/api/{SALEBOT_API_KEY}/callback"
 
@@ -29,6 +28,7 @@ RESULT_TTL = 3600  # хранение 1 час
 
 
 def cleanup(filename, task_id=None):
+    """Удаляет временные файлы"""
     try:
         if filename and os.path.exists(filename):
             os.remove(filename)
@@ -38,6 +38,7 @@ def cleanup(filename, task_id=None):
 
 
 def get_direct_url(file_id):
+    """Получает прямую ссылку на файл из Telegram"""
     try:
         resp = requests.get(f"{TELEGRAM_API_URL}/getFile", params={"file_id": file_id}, timeout=30)
         resp.raise_for_status()
@@ -49,22 +50,27 @@ def get_direct_url(file_id):
 
 
 def send_salebot_callback(client_id, direct_url):
+    """Отправляет callback в Salebot"""
     try:
         callback_url = f"{SALEBOT_CALLBACK_URL}?value_client_id=my_client&value_message=my_message"
-        payload = {
-            "my_client": client_id,
-            "my_message": direct_url
-        }
-        resp = requests.post(
-            callback_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=30
-        )
+        payload = {"my_client": client_id, "my_message": direct_url}
+        resp = requests.post(callback_url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
         resp.raise_for_status()
         logger.info(f"[client_id={client_id}] ✅ Salebot callback sent successfully: {resp.text}")
     except Exception as e:
         logger.error(f"[client_id={client_id}] ❌ Failed to send Salebot callback: {e}")
+
+
+def make_button(client_id, task_id, direct_url):
+    """Создаёт inline-кнопку: ссылка если короткая, иначе client_id|task_id"""
+    if direct_url and len(direct_url) <= 64:
+        callback_data = direct_url
+    else:
+        callback_data = f"{client_id}|{task_id}"
+
+    return {
+        "inline_keyboard": [[{"text": "🔗 Скачать файл", "callback_data": callback_data}]]
+    }
 
 
 @app.route("/health")
@@ -73,7 +79,7 @@ def health_check():
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "3.4-buttons"
+        "version": "3.5-dynamic-buttons"
     })
 
 
@@ -82,7 +88,6 @@ def process_audio():
     """Первый вебхук: Salebot → Render"""
     task_id = uuid.uuid4().hex[:8]
     logger.info(f"[task_id={task_id}] 🎯 /process_audio called")
-    logger.info(f"[task_id={task_id}] 🔍 Headers: {dict(request.headers)}")
 
     try:
         data = request.get_json(force=True, silent=True) or request.form.to_dict()
@@ -115,18 +120,9 @@ def process_audio():
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
-            reply_markup = {
-                "inline_keyboard": [[
-                    {
-                        "text": "🔗 Скачать файл",
-                        "callback_data": f"{client_id}|{task_id}"
-                    }
-                ]]
-            }
             payload = {
                 "chat_id": client_id,
                 "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!",
-                "reply_markup": json.dumps(reply_markup)
             }
             tg_resp = requests.post(send_url, data=payload, files=files, timeout=300)
 
@@ -134,11 +130,22 @@ def process_audio():
         logger.info(f"[task_id={task_id}] 📦 Telegram response: {tg_json}")
 
         if tg_resp.status_code != 200 or not tg_json.get("ok"):
-            logger.error(f"[task_id={task_id}] ❌ Telegram API error")
             return jsonify({"error": "Failed to send audio to Telegram", "task_id": task_id}), 500
 
         file_id = tg_json["result"]["audio"]["file_id"]
         direct_url = get_direct_url(file_id)
+
+        # --- Добавляем кнопку уже после отправки (editMessageReplyMarkup) ---
+        reply_markup = make_button(client_id, task_id, direct_url)
+        requests.post(
+            f"{TELEGRAM_API_URL}/editMessageReplyMarkup",
+            json={
+                "chat_id": client_id,
+                "message_id": tg_json["result"]["message_id"],
+                "reply_markup": reply_markup,
+            },
+            timeout=30
+        )
 
         # --- Сохраняем результат ---
         RESULTS[task_id] = {
@@ -151,17 +158,13 @@ def process_audio():
         }
 
         # --- Отправляем callback в Salebot ---
-        send_salebot_callback(client_id, direct_url)
+        if direct_url:
+            send_salebot_callback(client_id, direct_url)
 
         cleanup(voice_filename, task_id)
         cleanup(output_filename, task_id)
 
-        response = {
-            "task_id": task_id,
-            "file_id": file_id,
-            "direct_url": direct_url
-        }
-        logger.info(f"[task_id={task_id}] ✅ Response to Salebot: {response}")
+        response = {"task_id": task_id, "file_id": file_id, "direct_url": direct_url}
         return jsonify(response)
 
     except Exception as e:
@@ -172,20 +175,13 @@ def process_audio():
 @app.route("/get_result/<task_id>", methods=["GET"])
 def get_result(task_id):
     """Второй вебхук: Salebot → Render (проверка результата)"""
-    logger.info(f"[task_id={task_id}] 🌍 /get_result called from {request.remote_addr}")
-    logger.info(f"[task_id={task_id}] 🔍 Headers: {dict(request.headers)}")
-    logger.info(f"[task_id={task_id}] 🔍 Query args: {request.args}")
-
     result = RESULTS.get(task_id)
     if not result:
-        logger.warning(f"[task_id={task_id}] ❌ Result not found")
         return jsonify({"error": "Task not found", "task_id": task_id}), 404
 
     if time.time() - result.get("created_at", 0) > RESULT_TTL:
-        logger.warning(f"[task_id={task_id}] ⏰ Result expired")
         return jsonify({"error": "Result expired", "task_id": task_id}), 410
 
-    logger.info(f"[task_id={task_id}] ✅ Returning result: {result}")
     return jsonify(result)
 
 
@@ -197,7 +193,6 @@ def list_results():
         for task_id, result in RESULTS.items()
         if now - result.get("created_at", now) <= RESULT_TTL
     }
-    logger.info(f"📋 Active results: {active_results}")
     return jsonify(active_results)
 
 
@@ -213,16 +208,21 @@ def telegram_webhook():
             data = cq.get("data", "")
             chat_id = cq["message"]["chat"]["id"]
 
-            try:
-                client_id, task_id = data.split("|", 1)
-            except ValueError:
-                client_id, task_id = data, None
-
-            result = RESULTS.get(task_id)
-            if result and result.get("direct_url"):
-                text = f"🔗 Ваша ссылка: {result['direct_url']}"
+            # Если прилетел готовый URL
+            if data.startswith("http"):
+                text = f"🔗 Ваша ссылка: {data}"
             else:
-                text = "⚠️ Ссылка недоступна или устарела."
+                # иначе client_id|task_id
+                try:
+                    _, task_id = data.split("|", 1)
+                except ValueError:
+                    task_id = None
+
+                result = RESULTS.get(task_id)
+                if result and result.get("direct_url"):
+                    text = f"🔗 Ваша ссылка: {result['direct_url']}"
+                else:
+                    text = "⚠️ Ссылка недоступна или устарела."
 
             requests.post(
                 f"{TELEGRAM_API_URL}/sendMessage",
