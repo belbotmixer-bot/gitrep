@@ -18,10 +18,13 @@ GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/mai
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 TELEGRAM_FILE_API_URL = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}"
 
+# --- Salebot callback ---
+SALEBOT_API_KEY = os.environ.get("SALEBOT_API_KEY", "YOUR_SALEBOT_API_KEY_HERE")
+SALEBOT_CALLBACK_URL = f"https://chatter.salebot.pro/api/{SALEBOT_API_KEY}/callback"
+
 # --- Хранилище результатов ---
 RESULTS = {}
 RESULT_TTL = 3600  # хранение 1 час
-
 
 def cleanup(filename, task_id=None):
     try:
@@ -30,7 +33,6 @@ def cleanup(filename, task_id=None):
             logger.info(f"[task_id={task_id}] 🗑️ Deleted: {filename}")
     except Exception as e:
         logger.error(f"[task_id={task_id}] ⚠️ Cleanup error for {filename}: {e}")
-
 
 def get_direct_url(file_id):
     try:
@@ -42,6 +44,22 @@ def get_direct_url(file_id):
         logger.error(f"⚠️ Failed to get direct_url for file_id={file_id}: {e}")
         return None
 
+def send_salebot_callback(client_id, direct_url):
+    try:
+        payload = {
+            "my_client": client_id,
+            "my_message": direct_url
+        }
+        resp = requests.post(
+            SALEBOT_CALLBACK_URL,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        resp.raise_for_status()
+        logger.info(f"[client_id={client_id}] ✅ Salebot callback sent successfully: {resp.text}")
+    except Exception as e:
+        logger.error(f"[client_id={client_id}] ❌ Failed to send Salebot callback: {e}")
 
 @app.route("/health")
 def health_check():
@@ -51,7 +69,6 @@ def health_check():
         "timestamp": time.time(),
         "version": "3.3-logging"
     })
-
 
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
@@ -107,6 +124,7 @@ def process_audio():
         file_id = tg_json["result"]["audio"]["file_id"]
         direct_url = get_direct_url(file_id)
 
+        # --- Сохраняем результат ---
         RESULTS[task_id] = {
             "status": "done",
             "file_id": file_id,
@@ -115,6 +133,9 @@ def process_audio():
             "name": name,
             "created_at": time.time(),
         }
+
+        # --- Отправляем callback в Salebot ---
+        send_salebot_callback(client_id, direct_url)
 
         cleanup(voice_filename, task_id)
         cleanup(output_filename, task_id)
@@ -130,7 +151,6 @@ def process_audio():
     except Exception as e:
         logger.error(f"[task_id={task_id}] ❌ Error in /process_audio: {e}")
         return jsonify({"error": str(e), "task_id": task_id}), 500
-
 
 @app.route("/get_result/<task_id>", methods=["GET"])
 def get_result(task_id):
@@ -151,7 +171,6 @@ def get_result(task_id):
     logger.info(f"[task_id={task_id}] ✅ Returning result: {result}")
     return jsonify(result)
 
-
 @app.route("/list_results", methods=["GET"])
 def list_results():
     now = time.time()
@@ -162,7 +181,6 @@ def list_results():
     }
     logger.info(f"📋 Active results: {active_results}")
     return jsonify(active_results)
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
