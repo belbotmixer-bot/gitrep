@@ -4,7 +4,7 @@ import uuid
 import time
 import requests
 import logging
-from audio_processor import mix_voice_with_music
+from audio_processor import mix_voice_with_music  # твой модуль микса
 
 # --- Логирование ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -46,7 +46,6 @@ def get_direct_url(file_id):
 
 def send_salebot_callback(client_id, direct_url):
     try:
-        # Добавляем параметры value_client_id и value_message в URL
         callback_url = f"{SALEBOT_CALLBACK_URL}?value_client_id=my_client&value_message=my_message"
         payload = {
             "my_client": client_id,
@@ -106,16 +105,17 @@ def process_audio():
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"[task_id={task_id}] 🎵 Mixed audio created: {output_filename}")
 
-        # --- Отправляем в Telegram ---
+        # --- Отправляем в Telegram аудио ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
+            # Формируем подпись с ссылкой на микс
+            caption_text = f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
             payload = {
                 "chat_id": client_id,
-                "caption": f"🎶 Ваш микс готов! {name}" if name else "🎶 Ваш микс готов!"
+                "caption": caption_text
             }
             tg_resp = requests.post(send_url, data=payload, files=files, timeout=300)
-
         tg_json = tg_resp.json()
         logger.info(f"[task_id={task_id}] 📦 Telegram response: {tg_json}")
 
@@ -125,6 +125,16 @@ def process_audio():
 
         file_id = tg_json["result"]["audio"]["file_id"]
         direct_url = get_direct_url(file_id)
+
+        # --- Отправляем отдельное текстовое сообщение с ссылкой на микс ---
+        requests.post(
+            f"{TELEGRAM_API_URL}/sendMessage",
+            json={
+                "chat_id": client_id,
+                "text": f"🎶 Ваш микс готов! Ссылка на микс: {direct_url}"
+            },
+            timeout=30
+        )
 
         # --- Сохраняем результат ---
         RESULTS[task_id] = {
@@ -158,9 +168,6 @@ def process_audio():
 def get_result(task_id):
     """Второй вебхук: Salebot → Render (проверка результата)"""
     logger.info(f"[task_id={task_id}] 🌍 /get_result called from {request.remote_addr}")
-    logger.info(f"[task_id={task_id}] 🔍 Headers: {dict(request.headers)}")
-    logger.info(f"[task_id={task_id}] 🔍 Query args: {request.args}")
-
     result = RESULTS.get(task_id)
     if not result:
         logger.warning(f"[task_id={task_id}] ❌ Result not found")
