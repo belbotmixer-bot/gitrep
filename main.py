@@ -1,9 +1,9 @@
-from flask import Flask, request, jsonify
 import os
 import uuid
 import time
 import requests
 import logging
+from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from audio_processor import mix_voice_with_music  # твой модуль микса
 
@@ -11,6 +11,7 @@ from audio_processor import mix_voice_with_music  # твой модуль мик
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+# --- Flask ---
 app = Flask(__name__)
 
 # --- Конфигурация ---
@@ -18,34 +19,40 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-# 🔹 Укажи здесь свой Render-домен (при необходимости замени)
+# 🔹 Render URL приложения (текущий домен)
 APP_URL = "https://gitrep-9iwv.onrender.com"
 
 
-# --- Функции для анти-сна ---
+# --- Keep-alive функции ---
 def self_ping():
     """Регулярный self-ping"""
     try:
-        url = f"{APP_URL}/health"
-        requests.get(url, timeout=30)
-        logger.info("🟢 Self-ping successful")
+        requests.get(f"{APP_URL}/health", timeout=30)
+        logger.info("🔄 self_ping triggered")
     except Exception as e:
-        logger.warning(f"⚠️ Self-ping failed: {e}")
+        logger.warning(f"⚠️ self_ping error: {e}")
 
 
 def emergency_ping():
-    """Одноразовый ping при старте"""
+    """Аварийный ping при старте приложения"""
     try:
-        url = f"{APP_URL}/health"
-        requests.get(url, timeout=60)
-        logger.info("🚀 Emergency ping done")
+        requests.get(f"{APP_URL}/health", timeout=60)
+        logger.info("🚀 emergency_ping done")
     except requests.exceptions.Timeout:
         logger.info("⚠️ Приложение просыпается...")
     except Exception as e:
         logger.warning(f"❌ Ошибка emergency ping: {e}")
 
 
-# --- Очистка временных файлов ---
+# --- Запуск keep-alive сразу при импорте (для Gunicorn) ---
+emergency_ping()
+scheduler = BackgroundScheduler()
+scheduler.add_job(self_ping, 'interval', minutes=8)
+scheduler.start()
+logger.info("⏰ APScheduler started — keep-alive активен")
+
+
+# --- Вспомогательные функции ---
 def cleanup(filename, task_id=None):
     try:
         if filename and os.path.exists(filename):
@@ -55,18 +62,22 @@ def cleanup(filename, task_id=None):
         logger.error(f"[task_id={task_id}] ⚠️ Cleanup error for {filename}: {e}")
 
 
-# --- Healthcheck ---
-@app.route("/health")
+# --- Маршруты ---
+@app.route('/')
+def index():
+    return "✅ Server is running and protected from sleep!"
+
+
+@app.route('/health')
 def health_check():
     return jsonify({
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "4.2-keepalive"
+        "version": "4.3-keepalive"
     })
 
 
-# --- Основной webhook ---
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
     task_id = uuid.uuid4().hex[:8]
@@ -130,16 +141,8 @@ def process_audio():
         return jsonify({"error": str(e), "task_id": task_id}), 500
 
 
-# --- Запуск приложения ---
+# --- Запуск только для локального теста ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"🌐 Starting Flask server on port {port}...")
-
-    # 🔸 Анти-сон система
-    emergency_ping()
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(self_ping, "interval", minutes=8)
-    scheduler.start()
-    logger.info("⏰ Keepalive job started (ping every 8 minutes)")
-
+    logger.info(f"🌐 Starting Flask server on port {port} (local test)")
     app.run(host="0.0.0.0", port=port, debug=False)
