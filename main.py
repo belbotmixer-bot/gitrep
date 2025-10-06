@@ -4,6 +4,7 @@ import uuid
 import time
 import requests
 import logging
+from apscheduler.schedulers.background import BackgroundScheduler
 from audio_processor import mix_voice_with_music  # твой модуль микса
 
 # --- Логирование ---
@@ -17,6 +18,34 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/main/background_music.mp3"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
+# 🔹 Укажи здесь свой Render-домен (при необходимости замени)
+APP_URL = "https://belbotmixer-bot.onrender.com"
+
+
+# --- Функции для анти-сна ---
+def self_ping():
+    """Регулярный self-ping"""
+    try:
+        url = f"{APP_URL}/health"
+        requests.get(url, timeout=30)
+        logger.info("🟢 Self-ping successful")
+    except Exception as e:
+        logger.warning(f"⚠️ Self-ping failed: {e}")
+
+
+def emergency_ping():
+    """Одноразовый ping при старте"""
+    try:
+        url = f"{APP_URL}/health"
+        requests.get(url, timeout=60)
+        logger.info("🚀 Emergency ping done")
+    except requests.exceptions.Timeout:
+        logger.info("⚠️ Приложение просыпается...")
+    except Exception as e:
+        logger.warning(f"❌ Ошибка emergency ping: {e}")
+
+
+# --- Очистка временных файлов ---
 def cleanup(filename, task_id=None):
     try:
         if filename and os.path.exists(filename):
@@ -25,18 +54,21 @@ def cleanup(filename, task_id=None):
     except Exception as e:
         logger.error(f"[task_id={task_id}] ⚠️ Cleanup error for {filename}: {e}")
 
+
+# --- Healthcheck ---
 @app.route("/health")
 def health_check():
     return jsonify({
         "status": "healthy",
         "service": "voice-mixer-api",
         "timestamp": time.time(),
-        "version": "4.0-minimal"
+        "version": "4.2-keepalive"
     })
 
+
+# --- Основной webhook ---
 @app.route("/process_audio", methods=["POST"])
 def process_audio():
-    """Webhook: принимает голос, миксует и шлёт в Telegram"""
     task_id = uuid.uuid4().hex[:8]
     logger.info(f"[task_id={task_id}] 🎯 /process_audio called")
 
@@ -67,7 +99,7 @@ def process_audio():
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"[task_id={task_id}] 🎵 Mixed audio created: {output_filename}")
 
-        # --- Отправляем в Telegram аудио ---
+        # --- Отправляем в Telegram ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
             files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
@@ -97,7 +129,17 @@ def process_audio():
         logger.error(f"[task_id={task_id}] ❌ Error in /process_audio: {e}")
         return jsonify({"error": str(e), "task_id": task_id}), 500
 
+
+# --- Запуск приложения ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"🌐 Starting Flask server on port {port}...")
+
+    # 🔸 Анти-сон система
+    emergency_ping()
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(self_ping, "interval", minutes=8)
+    scheduler.start()
+    logger.info("⏰ Keepalive job started (ping every 8 minutes)")
+
     app.run(host="0.0.0.0", port=port, debug=False)
