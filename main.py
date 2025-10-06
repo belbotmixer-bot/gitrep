@@ -19,7 +19,7 @@ GITHUB_MUSIC_URL = "https://raw.githubusercontent.com/belbotmixer-bot/gitrep/mai
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 # 🔹 Укажи здесь свой Render-домен (при необходимости замени)
-APP_URL = "APP_URL = "https://gitrep-9iwv.onrender.com"
+APP_URL = "https://gitrep-9iwv.onrender.com"
 
 
 # --- Функции для анти-сна ---
