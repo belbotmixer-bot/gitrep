@@ -3,6 +3,7 @@ import uuid
 import time
 import requests
 import logging
+from datetime import datetime
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from audio_processor import mix_voice_with_music  # твой модуль микса
@@ -105,15 +106,18 @@ def process_audio():
             f.write(resp.content)
         logger.info(f"[task_id={task_id}] 📥 Voice saved as {voice_filename}")
 
+        # --- Формируем уникальное имя файла ---
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"affirmation_{timestamp}.mp3"
+
         # --- Миксуем ---
-        output_filename = f"mixed_{task_id}.mp3"
         mix_voice_with_music(voice_filename, output_filename, GITHUB_MUSIC_URL)
         logger.info(f"[task_id={task_id}] 🎵 Mixed audio created: {output_filename}")
 
         # --- Отправляем в Telegram ---
         send_url = f"{TELEGRAM_API_URL}/sendAudio"
         with open(output_filename, "rb") as audio_file:
-            files = {"audio": (f"{task_id}.mp3", audio_file, "audio/mpeg")}
+            files = {"audio": (output_filename, audio_file, "audio/mpeg")}
             caption_text = f"{name}, аффирмация готова" if name else "Аффирмация готова"
             payload = {"chat_id": client_id, "caption": caption_text}
             tg_resp = requests.post(send_url, data=payload, files=files, timeout=300)
